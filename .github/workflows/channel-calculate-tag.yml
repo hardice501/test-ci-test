@@ -43,7 +43,7 @@ jobs:
       stable_version: ${{ steps.calculate.outputs.stable_version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -119,11 +119,11 @@ jobs:
           RELEASE_ENVIRONMENT: ${{ inputs.environment }}
           NORMALIZED_STABLE_VERSION: ${{ steps.calculate.outputs.stable_version }}
         run: |
-          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
-          ## Channel Metadata
-          - source_ref: \`${SOURCE_REF}\`
-          - resolved_ref: \`${RESOLVED_REF}\`
-          - resolved_sha: \`${RESOLVED_SHA}\`
-          - environment: \`${RELEASE_ENVIRONMENT}\`
-          - stable_version: \`${NORMALIZED_STABLE_VERSION}\`
-          EOF
+          {
+            printf '%s\n' '## Channel Metadata'
+            printf '%s\n' "- source_ref: ${SOURCE_REF}"
+            printf '%s\n' "- resolved_ref: ${RESOLVED_REF}"
+            printf '%s\n' "- resolved_sha: ${RESOLVED_SHA}"
+            printf '%s\n' "- environment: ${RELEASE_ENVIRONMENT}"
+            printf '%s\n' "- stable_version: ${NORMALIZED_STABLE_VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"

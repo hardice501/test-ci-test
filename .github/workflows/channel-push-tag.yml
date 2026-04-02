@@ -35,7 +35,7 @@ jobs:
       TARGET_SHA: ${{ inputs.target_sha || github.event.inputs.target_sha }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

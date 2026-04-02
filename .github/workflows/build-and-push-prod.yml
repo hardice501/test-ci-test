@@ -21,7 +21,7 @@ jobs:
       IMAGE_REPOSITORY: ci-test
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0 # This is required for getting entire commit history
 

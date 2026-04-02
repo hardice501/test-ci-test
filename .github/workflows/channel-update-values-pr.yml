@@ -59,7 +59,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Checkout values repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ env.TARGET_REPOSITORY }}
           token: ${{ steps.app-token.outputs.token }}
