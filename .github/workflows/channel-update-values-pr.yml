@@ -158,7 +158,6 @@ jobs:
 
             ## Reviewer Tag
 
-            @hardice501 @mclub4
           delete-branch: true
 
       - name: Write summary
