@@ -139,8 +139,8 @@ jobs:
           path: values-repo
           branch: ${{ env.BRANCH_NAME }}
           base: main
-          title: chore: update ${{ inputs.environment }} image tag to ${{ inputs.version }}
-          commit-message: chore: update ${{ inputs.environment }} image tag to ${{ inputs.version }}
+          title: "chore: update ${{ inputs.environment }} image tag to ${{ inputs.version }}"
+          commit-message: "chore: update ${{ inputs.environment }} image tag to ${{ inputs.version }}"
           body: |
             ## Summary
 
