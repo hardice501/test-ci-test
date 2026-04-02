@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       stable_version:
-        description: "릴리즈 stable 버전. 예: v1.2.3 또는 1.2.3"
+        description: "릴리즈 stable 버전. 예: v1.2.3"
         required: true
         type: string
 
@@ -107,7 +107,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           pr_url="$(gh pr create \
-            --base "$SOURCE_REF" \
+            --base "main" \
             --head "$BRANCH_NAME" \
             --title "release ${{ steps.validate.outputs.tag_version }}" \
             --body $'## Summary\n\n- stable_version: `${{ steps.validate.outputs.tag_version }}`\n- monorepo_type: `${{ steps.monorepo.outputs.type }}`\n\n## Notes\n\nmaster merge 전 버전 정렬 PR 자동 생성함.')"
