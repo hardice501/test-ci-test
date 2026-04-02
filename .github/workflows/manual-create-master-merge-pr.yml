@@ -24,11 +24,20 @@ jobs:
       INPUT_STABLE_VERSION: ${{ github.event.inputs.stable_version }}
       BRANCH_NAME: chore/master-merge-${{ github.run_id }}
     steps:
+      - name: Create GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GIT_APP_ID }}
+          private-key: ${{ secrets.GIT_APP_SECRET }}
+          owner: ${{ github.repository_owner }}
+
       - name: Checkout target branch
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
+          token: ${{ steps.app_token.outputs.token }}
 
       - name: Validate stable version and existing tag
         id: validate
@@ -104,7 +113,7 @@ jobs:
         id: create_pr
         if: ${{ steps.changes.outputs.has_changes == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           pr_url="$(gh pr create \
             --base "main" \
