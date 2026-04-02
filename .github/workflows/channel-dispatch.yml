@@ -3,10 +3,6 @@ name: Manual Channel Dispatch
 on:
   workflow_dispatch:
     inputs:
-      source_ref:
-        description: Branch name or short/full commit hash
-        required: true
-        type: string
       environment:
         description: Release environment
         required: true
@@ -24,14 +20,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.inputs.source_ref }}-${{ github.event.inputs.environment }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   calculate:
     uses: ./.github/workflows/channel-calculate-tag.yml
     with:
-      source_ref: ${{ github.event.inputs.source_ref }}
+      source_ref: ${{ github.ref_name }}
       environment: ${{ github.event.inputs.environment }}
       stable_version: ${{ github.event.inputs.stable_version }}
     secrets: inherit
@@ -41,7 +37,7 @@ jobs:
       - calculate
     uses: ./.github/workflows/channel-ci.yml
     with:
-      source_ref: ${{ github.event.inputs.source_ref }}
+      source_ref: ${{ github.ref_name }}
       resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
     secrets: inherit
 
@@ -51,7 +47,7 @@ jobs:
       - ci
     uses: ./.github/workflows/channel-build-and-push.yml
     with:
-      source_ref: ${{ github.event.inputs.source_ref }}
+      source_ref: ${{ github.ref_name }}
       resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
       prev_tag: ${{ needs.calculate.outputs.prev_tag }}
       current_tag: ${{ needs.calculate.outputs.next_tag }}
@@ -83,7 +79,7 @@ jobs:
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Manual Channel Result
-          - source_ref: `${{ github.event.inputs.source_ref }}`
+          - source_ref: `${{ github.ref_name }}`
           - environment: `${{ github.event.inputs.environment }}`
           - stable_version: `${{ github.event.inputs.stable_version }}`
           - resolved_sha: `${{ needs.calculate.outputs.resolved_sha }}`
