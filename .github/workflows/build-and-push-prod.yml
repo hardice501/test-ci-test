@@ -1,0 +1,227 @@
+name: Build and Push Docker Image to ECR
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read # This is required for actions/checkout
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-build
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: self-hosted
+    env:
+      BASE_VERSION: latest
+      APP_VERSION: latest
+      IMAGE_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # This is required for getting entire commit history
+
+      # LAST_HEAD: last merge commit hash of master branch(last HEAD of master)
+      # FEATURE_HEAD: HEAD commit of dev(or hotfix) branch
+      - name: Get changed files
+        id: get_changed_files
+        run: |
+          LAST_HEAD=$(git rev-parse HEAD^1)
+          FEATURE_HEAD=$(git rev-parse HEAD^2)
+          git diff --name-only $LAST_HEAD $FEATURE_HEAD > changed_files.txt
+
+      - name: Get version tag
+        id: get_version_tag
+        run: |
+          # 각 앱의 package.json version 읽기
+          admin_api_ver="v$(jq -r '.version' apps/apis/admin/package.json)"
+          participant_api_ver="v$(jq -r '.version' apps/apis/participant/package.json)"
+          operator_api_ver="v$(jq -r '.version' apps/apis/operator/package.json)"
+
+          admin_web_ver="v$(jq -r '.version' apps/webs/admin/package.json)"
+          participant_web_ver="v$(jq -r '.version' apps/webs/participant/package.json)"
+          operator_web_ver="v$(jq -r '.version' apps/webs/operator/package.json)"
+
+          submission_worker_ver="v$(jq -r '.version' apps/workers/submission/package.json)"
+          scheduler_worker_ver="v$(jq -r '.version' apps/workers/scheduler/package.json)"
+
+          resource_connection_script_ver="v$(jq -r '.version' apps/scripts/resource-connection/package.json)"
+
+          # GITHUB_OUTPUT으로 내보내기
+          echo "admin_api_version=$admin_api_ver" >> "$GITHUB_OUTPUT"
+          echo "participant_api_version=$participant_api_ver" >> "$GITHUB_OUTPUT"
+          echo "operator_api_version=$operator_api_ver" >> "$GITHUB_OUTPUT"
+
+          echo "admin_web_version=$admin_web_ver" >> "$GITHUB_OUTPUT"
+          echo "participant_web_version=$participant_web_ver" >> "$GITHUB_OUTPUT"
+          echo "operator_web_version=$operator_web_ver" >> "$GITHUB_OUTPUT"
+
+          echo "submission_worker_version=$submission_worker_ver" >> "$GITHUB_OUTPUT"
+          echo "scheduler_worker_version=$scheduler_worker_ver" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create apps/webs/admin/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" | jq -r 'to_entries | map(select(.key|startswith("ADMIN_PROD_")) | "\(.key|sub("^ADMIN_PROD_";""))=\(.value|tostring)") | .[]' > apps/webs/admin/.env.production
+        env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Create apps/webs/operator/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" | jq -r 'to_entries | map(select(.key|startswith("OPERATOR_PROD_")) | "\(.key|sub("^OPERATOR_PROD_";""))=\(.value|tostring)") | .[]' > apps/webs/operator/.env.production
+        env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Create apps/webs/participant/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" | jq -r 'to_entries | map(select(.key|startswith("PARTICIPANT_PROD_")) | "\(.key|sub("^PARTICIPANT_PROD_";""))=\(.value|tostring)") | .[]' > apps/webs/participant/.env.production
+        env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Check and build base images if Dockerfile.base changed
+        id: check_base_images
+        run: |
+          BASE_API_CHANGED=false
+          BASE_WEB_CHANGED=false
+
+          if grep -q '^scripts/Dockerfile.base.api' changed_files.txt || grep -q '^docker-bake.hcl' changed_files.txt; then
+            BASE_API_CHANGED=true
+            echo "Building base-api image..."
+            docker buildx bake base-api --push
+          fi
+
+          if grep -q '^scripts/Dockerfile.base.web' changed_files.txt || grep -q '^docker-bake.hcl' changed_files.txt; then
+            BASE_WEB_CHANGED=true
+            echo "Building base-web image..."
+            docker buildx bake base-web --push
+          fi
+
+          if [ "$BASE_API_CHANGED" = "true" ] || [ "$BASE_WEB_CHANGED" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "base_api_changed=$BASE_API_CHANGED" >> $GITHUB_OUTPUT
+            echo "base_web_changed=$BASE_WEB_CHANGED" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check and build if packages/common changed
+        id: check_common
+        run: |
+          if [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if  grep -q '^packages/common' changed_files.txt; then
+              echo "changed=true" >> $GITHUB_OUTPUT
+              BUILD_TARGET=admin docker buildx bake --push
+              BUILD_TARGET=participant docker buildx bake --push
+              BUILD_TARGET=operator docker buildx bake --push
+              BUILD_TARGET=submission docker buildx bake worker --push
+              BUILD_TARGET=scheduler docker buildx bake worker --push
+            fi
+          else
+            # Base images changed, rebuild all services
+            echo "changed=true" >> $GITHUB_OUTPUT
+            BUILD_TARGET=admin docker buildx bake --push
+            BUILD_TARGET=participant docker buildx bake --push
+            BUILD_TARGET=operator docker buildx bake --push
+            BUILD_TARGET=submission docker buildx bake worker --push
+            BUILD_TARGET=scheduler docker buildx bake worker --push
+          fi
+
+      - name: Check and build if packages/api-shared changed
+        id: check_api_shared
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ]; then
+            if grep -q '^packages/api-shared' changed_files.txt; then
+              echo "changed=true" >> $GITHUB_OUTPUT
+              BUILD_TARGET=admin docker buildx bake backend --push
+              BUILD_TARGET=participant docker buildx bake backend --push
+              BUILD_TARGET=operator docker buildx bake backend --push
+              BUILD_TARGET=submission docker buildx bake worker --push
+              BUILD_TARGET=scheduler docker buildx bake worker --push
+            fi
+          fi
+
+      - name: Check and build if packages/web-shared changed
+        id: check_web_shared
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^packages/web-shared' changed_files.txt; then
+              echo "changed=true" >> $GITHUB_OUTPUT
+              BUILD_TARGET=admin docker buildx bake frontend --push
+              BUILD_TARGET=participant docker buildx bake frontend --push
+              BUILD_TARGET=operator docker buildx bake frontend --push
+            fi
+          fi
+
+      - name: Check and build if workers/submission changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/workers/submission' changed_files.txt; then
+              BUILD_TARGET=submission docker buildx bake worker --push
+            fi
+          fi
+      - name: Check and build if workers/scheduler changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/workers/scheduler' changed_files.txt; then
+              BUILD_TARGET=scheduler docker buildx bake worker --push
+            fi
+          fi
+      - name: Check and build if apis/admin changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/apis/admin' changed_files.txt; then
+              BUILD_TARGET=admin docker buildx bake backend --push
+            fi
+          fi
+
+      - name: Check and build if apis/participant changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/apis/participant' changed_files.txt; then
+              BUILD_TARGET=participant docker buildx bake backend --push
+            fi
+          fi
+
+      - name: Check and build if apis/operator changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/apis/operator' changed_files.txt; then
+              BUILD_TARGET=operator docker buildx bake backend --push
+            fi
+          fi
+
+      - name: Check and build if webs/admin changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_web_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/webs/admin' changed_files.txt; then
+              BUILD_TARGET=admin docker buildx bake frontend --push
+            fi
+          fi
+
+      - name: Check and build if webs/participant changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_web_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/webs/participant' changed_files.txt; then
+              BUILD_TARGET=participant docker buildx bake frontend --push
+            fi
+          fi
+
+      - name: Check and build if webs/operator changed
+        run: |
+          if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_web_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
+            if grep -q '^apps/webs/operator' changed_files.txt; then
+              BUILD_TARGET=operator docker buildx bake frontend --push
+            fi
+          fi

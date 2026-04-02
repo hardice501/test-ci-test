@@ -1,0 +1,128 @@
+name: Channel Build and Push
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      resolved_sha:
+        required: true
+        type: string
+      prev_tag:
+        required: false
+        type: string
+      current_tag:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.current_tag }}-build
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: self-hosted
+    env:
+      BASE_VERSION: latest
+      APP_VERSION: ${{ inputs.current_tag }}
+      IMAGE_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      TARGET_SHA: ${{ inputs.resolved_sha }}
+      TARGET_REF: ${{ inputs.source_ref }}
+      PREV_TAG: ${{ inputs.prev_tag }}
+      RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+    steps:
+      - name: Checkout target ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.resolved_sha }}
+
+      - name: Fetch tags and branches
+        run: |
+          git fetch --force --tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Validate environment input
+        run: |
+          case "$RELEASE_ENVIRONMENT" in
+            rc|hotfix|loadtest)
+              ;;
+            *)
+              echo "Unsupported environment: $RELEASE_ENVIRONMENT" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve secret prefix
+        id: secret_prefix
+        run: |
+          prefix="$(echo "$RELEASE_ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
+          echo "value=$prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create apps/webs/admin/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" \
+            | jq -r --arg prefix "ADMIN_${SECRET_PREFIX}_" 'to_entries | map(select(.key|startswith($prefix)) | "\(.key|sub("^" + $prefix;""))=\(.value|tostring)") | .[]' \
+            > apps/webs/admin/.env.production
+        env:
+          SECRET_PREFIX: ${{ steps.secret_prefix.outputs.value }}
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Create apps/webs/operator/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" \
+            | jq -r --arg prefix "OPERATOR_${SECRET_PREFIX}_" 'to_entries | map(select(.key|startswith($prefix)) | "\(.key|sub("^" + $prefix;""))=\(.value|tostring)") | .[]' \
+            > apps/webs/operator/.env.production
+        env:
+          SECRET_PREFIX: ${{ steps.secret_prefix.outputs.value }}
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Create apps/webs/participant/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" \
+            | jq -r --arg prefix "PARTICIPANT_${SECRET_PREFIX}_" 'to_entries | map(select(.key|startswith($prefix)) | "\(.key|sub("^" + $prefix;""))=\(.value|tostring)") | .[]' \
+            > apps/webs/participant/.env.production
+        env:
+          SECRET_PREFIX: ${{ steps.secret_prefix.outputs.value }}
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Build base images
+        run: |
+          docker buildx bake base-api --push
+          docker buildx bake base-web --push
+
+      - name: Build all application images
+        run: |
+          BUILD_TARGET=admin docker buildx bake --push
+          BUILD_TARGET=participant docker buildx bake --push
+          BUILD_TARGET=operator docker buildx bake --push
+          BUILD_TARGET=submission docker buildx bake worker --push
+          BUILD_TARGET=scheduler docker buildx bake worker --push
+
+      - name: Write summary
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Build Inputs
+          - source_ref: `${TARGET_REF}`
+          - resolved_sha: `${TARGET_SHA}`
+          - prev_tag: `${PREV_TAG}`
+          - current_tag: `${APP_VERSION}`
+          - environment: `${RELEASE_ENVIRONMENT}`
+          EOF

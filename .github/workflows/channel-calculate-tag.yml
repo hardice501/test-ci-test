@@ -1,0 +1,123 @@
+name: Channel Calculate Tag
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      stable_version:
+        required: true
+        type: string
+    outputs:
+      resolved_ref:
+        description: Resolved branch name or commit sha
+        value: ${{ jobs.calculate.outputs.resolved_ref }}
+      resolved_sha:
+        description: Resolved commit sha
+        value: ${{ jobs.calculate.outputs.resolved_sha }}
+      next_tag:
+        description: Next release tag
+        value: ${{ jobs.calculate.outputs.next_tag }}
+      prev_tag:
+        description: Previous comparable tag
+        value: ${{ jobs.calculate.outputs.prev_tag }}
+      stable_version:
+        description: Manual stable version input
+        value: ${{ jobs.calculate.outputs.stable_version }}
+
+permissions:
+  contents: read
+
+jobs:
+  calculate:
+    runs-on: ubuntu-latest
+    outputs:
+      resolved_ref: ${{ steps.calculate.outputs.resolved_ref }}
+      resolved_sha: ${{ steps.calculate.outputs.resolved_sha }}
+      next_tag: ${{ steps.calculate.outputs.next_tag }}
+      prev_tag: ${{ steps.calculate.outputs.prev_tag }}
+      stable_version: ${{ steps.calculate.outputs.stable_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate inputs and calculate release metadata
+        id: calculate
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+          STABLE_VERSION: ${{ inputs.stable_version }}
+        run: |
+          set -euo pipefail
+          
+          case "$RELEASE_ENVIRONMENT" in
+            rc|hotfix|loadtest)
+              ;;
+            *)
+              echo "Unsupported environment: $RELEASE_ENVIRONMENT" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$STABLE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            NORMALIZED_STABLE_VERSION="$STABLE_VERSION"
+          else
+            echo "Unsupported stable version format: $STABLE_VERSION" >&2
+            exit 1
+          fi
+
+          git fetch --force --tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+          if git show-ref --verify --quiet "refs/remotes/origin/$SOURCE_REF"; then
+            RESOLVED_REF="$SOURCE_REF"
+            RESOLVED_SHA="$(git rev-parse "refs/remotes/origin/$SOURCE_REF^{commit}")"
+          elif git rev-parse -q --verify "${SOURCE_REF}^{commit}" >/dev/null 2>&1; then
+            RESOLVED_REF="$SOURCE_REF"
+            RESOLVED_SHA="$(git rev-parse "${SOURCE_REF}^{commit}")"
+          else
+            echo "Unable to resolve source ref: $SOURCE_REF" >&2
+            exit 1
+          fi
+
+          LAST_CHANNEL_TAG="$(
+            git tag --list "${NORMALIZED_STABLE_VERSION}-${RELEASE_ENVIRONMENT}.*" \
+              | sort -V \
+              | tail -n 1 \
+              || true
+          )"
+
+          if [ -n "$LAST_CHANNEL_TAG" ]; then
+            LAST_CHANNEL_NUMBER="$(echo "$LAST_CHANNEL_TAG" | sed -nE "s/^${NORMALIZED_STABLE_VERSION}-${RELEASE_ENVIRONMENT}\.([0-9]+)$/\\1/p")"
+            NEXT_CHANNEL_NUMBER=$((LAST_CHANNEL_NUMBER + 1))
+            PREV_TAG="$LAST_CHANNEL_TAG"
+          else
+            NEXT_CHANNEL_NUMBER=1
+            PREV_TAG="$NORMALIZED_STABLE_VERSION"
+          fi
+
+          NEXT_TAG="${NORMALIZED_STABLE_VERSION}-${RELEASE_ENVIRONMENT}.${NEXT_CHANNEL_NUMBER}"
+
+          {
+            echo "resolved_ref=$RESOLVED_REF"
+            echo "resolved_sha=$RESOLVED_SHA"
+            echo "next_tag=$NEXT_TAG"
+            echo "prev_tag=$PREV_TAG"
+            echo "stable_version=$NORMALIZED_STABLE_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write summary
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Channel Metadata
+          - source_ref: `${{ inputs.source_ref }}`
+          - resolved_ref: `${{ steps.calculate.outputs.resolved_ref }}`
+          - resolved_sha: `${{ steps.calculate.outputs.resolved_sha }}`
+          - environment: `${{ inputs.environment }}`
+          - stable_version: `${{ steps.calculate.outputs.stable_version }}`
+          EOF

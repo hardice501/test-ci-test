@@ -1,0 +1,109 @@
+name: Manual Channel Dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch name or short/full commit hash
+        required: true
+        type: string
+      environment:
+        description: Release environment
+        required: true
+        type: choice
+        options:
+          - rc
+          - hotfix
+          - loadtest
+      stable_version:
+        description: 최신 stable 기준 버전 수동 입력. 예: v1.2.3 또는 1.2.3. 최종 결과는 v1.2.3-{env}.1 형태로 자동 계산됨
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.source_ref }}-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  calculate:
+    uses: ./.github/workflows/channel-calculate-tag.yml
+    with:
+      source_ref: ${{ github.event.inputs.source_ref }}
+      environment: ${{ github.event.inputs.environment }}
+      stable_version: ${{ github.event.inputs.stable_version }}
+    secrets: inherit
+
+  ci:
+    needs:
+      - calculate
+    uses: ./.github/workflows/channel-ci.yml
+    with:
+      source_ref: ${{ github.event.inputs.source_ref }}
+      resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
+    secrets: inherit
+
+  build-and-push:
+    needs:
+      - calculate
+      - ci
+    uses: ./.github/workflows/channel-build-and-push.yml
+    with:
+      source_ref: ${{ github.event.inputs.source_ref }}
+      resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
+      prev_tag: ${{ needs.calculate.outputs.prev_tag }}
+      current_tag: ${{ needs.calculate.outputs.next_tag }}
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit
+
+  push-tag:
+    needs:
+      - calculate
+      - ci
+      - build-and-push
+    uses: ./.github/workflows/channel-push-tag.yml
+    with:
+      tag_name: ${{ needs.calculate.outputs.next_tag }}
+      target_sha: ${{ needs.calculate.outputs.resolved_sha }}
+    secrets: inherit
+
+  summarize:
+    needs:
+      - calculate
+      - ci
+      - build-and-push
+      - push-tag
+      - update-values-pr
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write summary
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Manual Channel Result
+          - source_ref: `${{ github.event.inputs.source_ref }}`
+          - environment: `${{ github.event.inputs.environment }}`
+          - stable_version: `${{ github.event.inputs.stable_version }}`
+          - resolved_sha: `${{ needs.calculate.outputs.resolved_sha }}`
+          - ci_result: `${{ needs.ci.result }}`
+          - prev_tag: `${{ needs.calculate.outputs.prev_tag }}`
+          - next_tag: `${{ needs.calculate.outputs.next_tag }}`
+          - build_result: `${{ needs.build-and-push.result }}`
+          - tag_push_result: `${{ needs.push-tag.result || 'skipped' }}`
+          - values_pr_result: `${{ needs.update-values-pr.result }}`
+          EOF
+
+  update-values-pr:
+    needs:
+      - calculate
+      - ci
+      - build-and-push
+      - push-tag
+    if: ${{ always() && needs.push-tag.result == 'success' }}
+    uses: ./.github/workflows/channel-update-values-pr.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      version: ${{ needs.calculate.outputs.next_tag }}
+    secrets: inherit

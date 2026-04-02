@@ -1,0 +1,10 @@
+{
+  "name": "@ci-test/api-tests",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "clean": "node -e \"process.exit(0)\""
+  }
+}

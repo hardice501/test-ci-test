@@ -1,0 +1,79 @@
+name: Channel Push Tag
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
+        type: string
+      target_sha:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Tag to push
+        required: true
+        type: string
+      target_sha:
+        description: Commit sha to tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag_name || github.event.inputs.tag_name }}
+  cancel-in-progress: true
+
+jobs:
+  push-tag:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ inputs.tag_name || github.event.inputs.tag_name }}
+      TARGET_SHA: ${{ inputs.target_sha || github.event.inputs.target_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: |
+          git fetch --force --tags --prune origin
+
+      - name: Validate tag format
+        run: |
+          if [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            exit 0
+          fi
+
+          echo "Unsupported tag format: $TAG_NAME" >&2
+          exit 1
+
+      - name: Validate target sha
+        run: |
+          git rev-parse -q --verify "${TARGET_SHA}^{commit}" >/dev/null 2>&1
+
+      - name: Ensure tag does not already exist
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag already exists: $TAG_NAME" >&2
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" -m "Channel $TAG_NAME" "$TARGET_SHA"
+          git push origin "refs/tags/$TAG_NAME"
+
+      - name: Write summary
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Tag Push
+          - tag_name: `${TAG_NAME}`
+          - target_sha: `${TARGET_SHA}`
+          EOF
