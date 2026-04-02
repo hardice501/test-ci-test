@@ -54,51 +54,247 @@ jobs:
       environment: ${{ github.event.inputs.environment }}
     secrets: inherit
 
-  push-tag:
+  deployment-sync:
     needs:
       - calculate
       - ci
       - build-and-push
-    uses: ./.github/workflows/channel-push-tag.yml
-    with:
-      tag_name: ${{ needs.calculate.outputs.next_tag }}
-      target_sha: ${{ needs.calculate.outputs.resolved_sha }}
-    secrets: inherit
-
-  summarize:
-    needs:
-      - calculate
-      - ci
-      - build-and-push
-      - push-tag
-      - update-values-pr
-    if: ${{ always() }}
+    if: ${{ always() && needs.build-and-push.result == 'success' }}
     runs-on: ubuntu-latest
+    env:
+      SOURCE_REF: ${{ github.ref_name }}
+      CHANNEL_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      STABLE_VERSION: ${{ github.event.inputs.stable_version }}
+      TARGET_SHA: ${{ needs.calculate.outputs.resolved_sha }}
+      IMAGE_TAG: ${{ needs.calculate.outputs.next_tag }}
+      TARGET_REPOSITORY: ${{ vars.HELM_CHART_VALUES_REPO }}
+      SCRIPT_PATH: ${{ vars.SCRIPT_PATH }}
+      TARGET_SERVICES: ${{ vars.CHANNEL_DEPLOY_SERVICES }}
+      BRANCH_NAME: chore/update-channel-image-${{ github.event.inputs.environment }}-${{ github.run_id }}
     steps:
-      - name: Write summary
-        run: |
-          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
-          ## Manual Channel Result
-          - source_ref: \`${{ github.ref_name }}\`
-          - environment: \`${{ github.event.inputs.environment }}\`
-          - stable_version: \`${{ github.event.inputs.stable_version }}\`
-          - resolved_sha: \`${{ needs.calculate.outputs.resolved_sha }}\`
-          - ci_result: \`${{ needs.ci.result }}\`
-          - image_tag: \`${{ needs.calculate.outputs.next_tag }}\`
-          - build_result: \`${{ needs.build-and-push.result }}\`
-          - tag_push_result: \`${{ needs.push-tag.result || 'skipped' }}\`
-          - values_pr_result: \`${{ needs.update-values-pr.result }}\`
-          EOF
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-  update-values-pr:
-    needs:
-      - calculate
-      - ci
-      - build-and-push
-      - push-tag
-    if: ${{ always() && needs.push-tag.result == 'success' }}
-    uses: ./.github/workflows/channel-update-values-pr.yml
-    with:
-      environment: ${{ github.event.inputs.environment }}
-      version: ${{ needs.calculate.outputs.next_tag }}
-    secrets: inherit
+      - name: Fetch tags
+        run: |
+          git fetch --force --tags --prune origin
+
+      - name: Validate tag format
+        run: |
+          if [[ "$IMAGE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$IMAGE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc|hotfix|loadtest)\.[0-9]+$ ]]; then
+            exit 0
+          fi
+
+          echo "Unsupported tag format: $IMAGE_TAG" >&2
+          exit 1
+
+      - name: Validate target sha
+        run: |
+          git rev-parse -q --verify "${TARGET_SHA}^{commit}" >/dev/null 2>&1
+
+      - name: Ensure tag does not already exist
+        run: |
+          if git rev-parse -q --verify "refs/tags/$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "Tag already exists: $IMAGE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Create and push tag
+        id: push_tag
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$IMAGE_TAG" -m "Channel $IMAGE_TAG" "$TARGET_SHA"
+          git push origin "refs/tags/$IMAGE_TAG"
+
+      - name: Validate workflow variables
+        id: validate_vars
+        if: ${{ steps.push_tag.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          if [ -z "$TARGET_REPOSITORY" ]; then
+            echo "Repository variable HELM_CHART_VALUES_REPO is required" >&2
+            exit 1
+          fi
+
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "Repository variable SCRIPT_PATH is required" >&2
+            exit 1
+          fi
+
+          if [ -z "$TARGET_SERVICES" ]; then
+            echo "Repository variable CHANNEL_DEPLOY_SERVICES is required" >&2
+            exit 1
+          fi
+
+      - name: Create GitHub App token
+        id: app_token
+        if: ${{ steps.validate_vars.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GIT_APP_ID }}
+          private-key: ${{ secrets.GIT_APP_SECRET }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout values repository
+        id: checkout_values
+        if: ${{ steps.app_token.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.TARGET_REPOSITORY }}
+          token: ${{ steps.app_token.outputs.token }}
+          fetch-depth: 0
+          path: values-repo
+
+      - name: Validate script path
+        id: validate_script_path
+        if: ${{ steps.checkout_values.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: values-repo
+        run: |
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "Script not found: $SCRIPT_PATH" >&2
+            exit 1
+          fi
+
+      - name: Resolve target environment
+        id: resolve_environment
+        if: ${{ steps.validate_script_path.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          case "$CHANNEL_ENVIRONMENT" in
+            rc)
+              echo "value=stg" >> "$GITHUB_OUTPUT"
+              ;;
+            hotfix)
+              echo "value=prod" >> "$GITHUB_OUTPUT"
+              ;;
+            loadtest)
+              echo "value=lt" >> "$GITHUB_OUTPUT"
+              ;;
+            dev)
+              echo "value=dev" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported channel environment: $CHANNEL_ENVIRONMENT" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Update image tags for all services
+        id: update_values
+        if: ${{ steps.resolve_environment.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: values-repo
+        env:
+          TARGET_ENVIRONMENT: ${{ steps.resolve_environment.outputs.value }}
+        run: |
+          chmod +x "$SCRIPT_PATH"
+
+          for service in $TARGET_SERVICES; do
+            "./$SCRIPT_PATH" "$service" "$TARGET_ENVIRONMENT" "$IMAGE_TAG"
+          done
+
+      - name: Check for changes
+        id: changes
+        if: ${{ steps.update_values.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: values-repo
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create pull request
+        id: create_pr
+        if: ${{ steps.changes.outcome == 'success' && steps.changes.outputs.has_changes == 'true' }}
+        continue-on-error: true
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          path: values-repo
+          branch: ${{ env.BRANCH_NAME }}
+          base: main
+          add-paths: .
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          title: "chore: update ${{ github.event.inputs.environment }} image tag to ${{ needs.calculate.outputs.next_tag }}"
+          commit-message: "chore: update ${{ github.event.inputs.environment }} image tag to ${{ needs.calculate.outputs.next_tag }}"
+          body: |
+            ## Summary
+
+            `${{ steps.resolve_environment.outputs.value }}` 환경 이미지 버전을 `${{ needs.calculate.outputs.next_tag }}` 으로 변경함.
+
+            ## Describe your changes
+
+            values repo 내 배포 대상 서비스들의 이미지 태그를 `${{ needs.calculate.outputs.next_tag }}` 으로 일괄 수정함.
+            실행 채널은 `${{ github.event.inputs.environment }}` 이고, 실제 반영 환경값은 `${{ steps.resolve_environment.outputs.value }}` 임.
+            대상 서비스는 `${{ vars.CHANNEL_DEPLOY_SERVICES }}` 임.
+
+            ## Task Link
+
+            N/A
+
+            ## Reviewer Tag
+          delete-branch: true
+
+      - name: Write summary
+        if: ${{ always() }}
+        env:
+          TAG_PUSH_RESULT: ${{ steps.push_tag.outcome }}
+          VALUES_PR_RESULT: ${{ steps.create_pr.outcome }}
+          CHANGES_DETECTED: ${{ steps.changes.outputs.has_changes }}
+        run: |
+          if [ "$TAG_PUSH_RESULT" != "success" ]; then
+            values_pr_result="skipped"
+          elif [ "$CHANGES_DETECTED" = "false" ]; then
+            values_pr_result="no_changes"
+          elif [ -n "$VALUES_PR_RESULT" ]; then
+            values_pr_result="$VALUES_PR_RESULT"
+          else
+            values_pr_result="skipped"
+          fi
+
+          {
+            printf '%s\n' '## Manual Channel Result'
+            printf '%s\n' "- source_ref: \`${SOURCE_REF}\`"
+            printf '%s\n' "- environment: \`${CHANNEL_ENVIRONMENT}\`"
+            printf '%s\n' "- stable_version: \`${STABLE_VERSION}\`"
+            printf '%s\n' "- resolved_sha: \`${TARGET_SHA}\`"
+            printf '%s\n' "- ci_result: \`${{ needs.ci.result }}\`"
+            printf '%s\n' "- image_tag: \`${IMAGE_TAG}\`"
+            printf '%s\n' "- build_result: \`${{ needs.build-and-push.result }}\`"
+            printf '%s\n' "- tag_push_result: \`${TAG_PUSH_RESULT}\`"
+            printf '%s\n' "- values_pr_result: \`${values_pr_result}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if finalize failed
+        if: ${{ always() }}
+        run: |
+          if [ "${{ steps.push_tag.outcome }}" != "success" ]; then
+            echo "Tag push failed" >&2
+            exit 1
+          fi
+
+          if [ "${{ steps.validate_vars.outcome }}" = "failure" ] || \
+             [ "${{ steps.app_token.outcome }}" = "failure" ] || \
+             [ "${{ steps.checkout_values.outcome }}" = "failure" ] || \
+             [ "${{ steps.validate_script_path.outcome }}" = "failure" ] || \
+             [ "${{ steps.resolve_environment.outcome }}" = "failure" ] || \
+             [ "${{ steps.update_values.outcome }}" = "failure" ] || \
+             [ "${{ steps.changes.outcome }}" = "failure" ]; then
+            echo "Values PR preparation failed" >&2
+            exit 1
+          fi
+
+          if [ "${{ steps.changes.outputs.has_changes }}" = "true" ] && [ "${{ steps.create_pr.outcome }}" != "success" ]; then
+            echo "Pull request creation failed" >&2
+            exit 1
+          fi
