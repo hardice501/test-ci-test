@@ -1,118 +1,61 @@
-name: Manual Channel Dispatch
+name: Job Cross Repo PR
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      environment:
-        description: Release environment
-        required: true
-        type: choice
-        options:
-          - rc
-          - hotfix
-          - loadtest
-      stable_version:
-        description: "최신 stable 기준 버전 수동 입력. 예: v1.2.3 또는 1.2.3. 최종 결과는 v1.2.3-{env}.1 형태로 자동 계산됨"
+      source_ref:
         required: true
         type: string
+      environment:
+        required: true
+        type: string
+      stable_version:
+        required: true
+        type: string
+      resolved_sha:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      ci_result:
+        required: true
+        type: string
+      build_result:
+        required: true
+        type: string
+      tag_push_result:
+        required: true
+        type: string
+    secrets:
+      GIT_APP_ID:
+        required: true
+      GIT_APP_SECRET:
+        required: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.inputs.environment }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ inputs.environment }}-${{ inputs.image_tag }}
+  cancel-in-progress: true
 
 jobs:
-  calculate:
-    uses: ./.github/workflows/channel-calculate-tag.yml
-    with:
-      source_ref: ${{ github.ref_name }}
-      environment: ${{ github.event.inputs.environment }}
-      stable_version: ${{ github.event.inputs.stable_version }}
-    secrets: inherit
-
-  ci:
-    needs:
-      - calculate
-    uses: ./.github/workflows/channel-ci.yml
-    with:
-      source_ref: ${{ github.ref_name }}
-      resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
-    secrets: inherit
-
-  build-and-push:
-    needs:
-      - calculate
-      - ci
-    uses: ./.github/workflows/channel-build-and-push.yml
-    with:
-      source_ref: ${{ github.ref_name }}
-      resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
-      prev_tag: ${{ needs.calculate.outputs.prev_tag }}
-      current_tag: ${{ needs.calculate.outputs.next_tag }}
-      environment: ${{ github.event.inputs.environment }}
-    secrets: inherit
-
   deployment-sync:
-    needs:
-      - calculate
-      - ci
-      - build-and-push
-    if: ${{ always() && needs.build-and-push.result == 'success' }}
     runs-on: ubuntu-latest
     env:
-      SOURCE_REF: ${{ github.ref_name }}
-      CHANNEL_ENVIRONMENT: ${{ github.event.inputs.environment }}
-      STABLE_VERSION: ${{ github.event.inputs.stable_version }}
-      TARGET_SHA: ${{ needs.calculate.outputs.resolved_sha }}
-      IMAGE_TAG: ${{ needs.calculate.outputs.next_tag }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+      CHANNEL_ENVIRONMENT: ${{ inputs.environment }}
+      STABLE_VERSION: ${{ inputs.stable_version }}
+      TARGET_SHA: ${{ inputs.resolved_sha }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
       TARGET_REPOSITORY: ${{ vars.HELM_CHART_VALUES_REPO }}
       SCRIPT_PATH: ${{ vars.SCRIPT_PATH }}
       TARGET_SERVICES: ${{ vars.CHANNEL_DEPLOY_SERVICES }}
-      BRANCH_NAME: chore/update-channel-image-${{ github.event.inputs.environment }}-${{ github.run_id }}
+      BRANCH_NAME: chore/update-channel-image-${{ inputs.environment }}-${{ github.run_id }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Fetch tags
-        run: |
-          git fetch --force --tags --prune origin
-
-      - name: Validate tag format
-        run: |
-          if [[ "$IMAGE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$IMAGE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc|hotfix|loadtest)\.[0-9]+$ ]]; then
-            exit 0
-          fi
-
-          echo "Unsupported tag format: $IMAGE_TAG" >&2
-          exit 1
-
-      - name: Validate target sha
-        run: |
-          git rev-parse -q --verify "${TARGET_SHA}^{commit}" >/dev/null 2>&1
-
-      - name: Ensure tag does not already exist
-        run: |
-          if git rev-parse -q --verify "refs/tags/$IMAGE_TAG" >/dev/null 2>&1; then
-            echo "Tag already exists: $IMAGE_TAG" >&2
-            exit 1
-          fi
-
-      - name: Create and push tag
-        id: push_tag
-        continue-on-error: true
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$IMAGE_TAG" -m "Channel $IMAGE_TAG" "$TARGET_SHA"
-          git push origin "refs/tags/$IMAGE_TAG"
-
       - name: Validate workflow variables
         id: validate_vars
-        if: ${{ steps.push_tag.outcome == 'success' }}
         continue-on-error: true
         run: |
           if [ -z "$TARGET_REPOSITORY" ]; then
@@ -225,17 +168,17 @@ jobs:
           add-paths: .
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          title: "chore: update ${{ github.event.inputs.environment }} image tag to ${{ needs.calculate.outputs.next_tag }}"
-          commit-message: "chore: update ${{ github.event.inputs.environment }} image tag to ${{ needs.calculate.outputs.next_tag }}"
+          title: "chore: update ${{ inputs.environment }} image tag to ${{ inputs.image_tag }}"
+          commit-message: "chore: update ${{ inputs.environment }} image tag to ${{ inputs.image_tag }}"
           body: |
             ## Summary
 
-            `${{ steps.resolve_environment.outputs.value }}` 환경 이미지 버전을 `${{ needs.calculate.outputs.next_tag }}` 으로 변경함.
+            `${{ steps.resolve_environment.outputs.value }}` 환경 이미지 버전을 `${{ inputs.image_tag }}` 으로 변경함.
 
             ## Describe your changes
 
-            values repo 내 배포 대상 서비스들의 이미지 태그를 `${{ needs.calculate.outputs.next_tag }}` 으로 일괄 수정함.
-            실행 채널은 `${{ github.event.inputs.environment }}` 이고, 실제 반영 환경값은 `${{ steps.resolve_environment.outputs.value }}` 임.
+            values repo 내 배포 대상 서비스들의 이미지 태그를 `${{ inputs.image_tag }}` 으로 일괄 수정함.
+            실행 채널은 `${{ inputs.environment }}` 이고, 실제 반영 환경값은 `${{ steps.resolve_environment.outputs.value }}` 임.
             대상 서비스는 `${{ vars.CHANNEL_DEPLOY_SERVICES }}` 임.
 
             ## Task Link
@@ -248,13 +191,10 @@ jobs:
       - name: Write summary
         if: ${{ always() }}
         env:
-          TAG_PUSH_RESULT: ${{ steps.push_tag.outcome }}
           VALUES_PR_RESULT: ${{ steps.create_pr.outcome }}
           CHANGES_DETECTED: ${{ steps.changes.outputs.has_changes }}
         run: |
-          if [ "$TAG_PUSH_RESULT" != "success" ]; then
-            values_pr_result="skipped"
-          elif [ "$CHANGES_DETECTED" = "false" ]; then
+          if [ "$CHANGES_DETECTED" = "false" ]; then
             values_pr_result="no_changes"
           elif [ -n "$VALUES_PR_RESULT" ]; then
             values_pr_result="$VALUES_PR_RESULT"
@@ -268,21 +208,16 @@ jobs:
             printf '%s\n' "- environment: \`${CHANNEL_ENVIRONMENT}\`"
             printf '%s\n' "- stable_version: \`${STABLE_VERSION}\`"
             printf '%s\n' "- resolved_sha: \`${TARGET_SHA}\`"
-            printf '%s\n' "- ci_result: \`${{ needs.ci.result }}\`"
+            printf '%s\n' "- ci_result: \`${{ inputs.ci_result }}\`"
             printf '%s\n' "- image_tag: \`${IMAGE_TAG}\`"
-            printf '%s\n' "- build_result: \`${{ needs.build-and-push.result }}\`"
-            printf '%s\n' "- tag_push_result: \`${TAG_PUSH_RESULT}\`"
+            printf '%s\n' "- build_result: \`${{ inputs.build_result }}\`"
+            printf '%s\n' "- tag_push_result: \`${{ inputs.tag_push_result }}\`"
             printf '%s\n' "- values_pr_result: \`${values_pr_result}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fail if finalize failed
+      - name: Fail if deployment sync failed
         if: ${{ always() }}
         run: |
-          if [ "${{ steps.push_tag.outcome }}" != "success" ]; then
-            echo "Tag push failed" >&2
-            exit 1
-          fi
-
           if [ "${{ steps.validate_vars.outcome }}" = "failure" ] || \
              [ "${{ steps.app_token.outcome }}" = "failure" ] || \
              [ "${{ steps.checkout_values.outcome }}" = "failure" ] || \

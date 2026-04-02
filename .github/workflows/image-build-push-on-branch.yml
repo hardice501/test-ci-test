@@ -1,0 +1,85 @@
+name: Image Build Push on Branch
+
+on:
+  push:
+    branches:
+      - master
+      - dev
+  workflow_dispatch:
+    inputs:
+      pr_title:
+        description: "PR title to extract version from (master only). e.g. 'release v1.2.3'"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-build
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      last_head: ${{ steps.meta.outputs.last_head }}
+      feature_head: ${{ steps.meta.outputs.feature_head }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      secret_prefix: ${{ steps.meta.outputs.secret_prefix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute build metadata
+        id: meta
+        run: |
+          set -euo pipefail
+
+          LAST_HEAD="$(git rev-parse HEAD^1)"
+          FEATURE_HEAD="$(git rev-parse HEAD^2 2>/dev/null || git rev-parse HEAD)"
+
+          if [ "${{ github.ref_name }}" = "master" ]; then
+            PR_TITLE="${{ github.event.inputs.pr_title }}"
+            if [ -z "$PR_TITLE" ]; then
+              PR_TITLE="$(git log -1 --format="%s %b")"
+            fi
+            IMAGE_TAG="$(echo "$PR_TITLE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+            if [ -z "$IMAGE_TAG" ]; then
+              echo "Could not extract version from PR title: $PR_TITLE" >&2
+              exit 1
+            fi
+            SECRET_PREFIX="PROD"
+          else
+            SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+            IMAGE_TAG="dev-${SHORT_SHA}"
+            SECRET_PREFIX="DEV"
+          fi
+
+          echo "last_head=$LAST_HEAD" >> "$GITHUB_OUTPUT"
+          echo "feature_head=$FEATURE_HEAD" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "secret_prefix=$SECRET_PREFIX" >> "$GITHUB_OUTPUT"
+
+      - name: Write summary
+        run: |
+          {
+            printf '%s\n' '## Build Prepare'
+            printf '%s\n' "- branch: \`${{ github.ref_name }}\`"
+            printf '%s\n' "- image_tag: \`${{ steps.meta.outputs.image_tag }}\`"
+            printf '%s\n' "- secret_prefix: \`${{ steps.meta.outputs.secret_prefix }}\`"
+            printf '%s\n' "- feature_head: \`${{ steps.meta.outputs.feature_head }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-and-push:
+    needs: prepare
+    uses: ./.github/workflows/job-image-build-push.yml
+    with:
+      last_head: ${{ needs.prepare.outputs.last_head }}
+      feature_head: ${{ needs.prepare.outputs.feature_head }}
+      secret_prefix: ${{ needs.prepare.outputs.secret_prefix }}
+      image_tag: ${{ needs.prepare.outputs.image_tag }}
+      channel_tag: ""
+    secrets: inherit

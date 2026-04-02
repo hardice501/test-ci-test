@@ -1,0 +1,208 @@
+name: Job Image Build Push
+
+on:
+  workflow_call:
+    inputs:
+      last_head:
+        required: true
+        type: string
+        description: "Base commit SHA to diff from"
+      feature_head:
+        required: true
+        type: string
+        description: "Target commit SHA to checkout and diff to"
+      secret_prefix:
+        required: true
+        type: string
+        description: "Secret prefix for env files (e.g. PROD, STAG, LOADTEST)"
+      image_tag:
+        required: true
+        type: string
+        description: "Docker image tag (e.g. latest, v1.2.3-rc.1)"
+      channel_tag:
+        required: false
+        type: string
+        default: ''
+        description: "If set, retag built images with sha-SHORT_SHA and channel_tag"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.image_tag }}-build
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    env:
+      BASE_VERSION: latest
+      APP_VERSION: ${{ inputs.image_tag }}
+      IMAGE_REPOSITORY: ci-test
+      LAST_HEAD: ${{ inputs.last_head }}
+      FEATURE_HEAD: ${{ inputs.feature_head }}
+      SECRET_PREFIX: ${{ inputs.secret_prefix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.feature_head }}
+
+      - name: Fetch full history and tags
+        run: |
+          git fetch --force --tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Skip AWS login for ci-test
+        run: |
+          echo "Skip AWS credential and ECR login in ci-test"
+
+      - name: Create apps/webs/admin/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" \
+            | jq -r --arg prefix "ADMIN_${SECRET_PREFIX}_" 'to_entries | map(select(.key|startswith($prefix)) | "\(.key|sub("^" + $prefix;""))=\(.value|tostring)") | .[]' \
+            > apps/webs/admin/.env.production
+        env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Create apps/webs/operator/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" \
+            | jq -r --arg prefix "OPERATOR_${SECRET_PREFIX}_" 'to_entries | map(select(.key|startswith($prefix)) | "\(.key|sub("^" + $prefix;""))=\(.value|tostring)") | .[]' \
+            > apps/webs/operator/.env.production
+        env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Create apps/webs/participant/.env.production file
+        run: |
+          echo "$SECRETS_CONTEXT" \
+            | jq -r --arg prefix "PARTICIPANT_${SECRET_PREFIX}_" 'to_entries | map(select(.key|startswith($prefix)) | "\(.key|sub("^" + $prefix;""))=\(.value|tostring)") | .[]' \
+            > apps/webs/participant/.env.production
+        env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Build changed images
+        id: build
+        run: |
+          set -euo pipefail
+
+          git diff --name-only "$LAST_HEAD" "$FEATURE_HEAD" > changed_files.txt
+          echo "=== Changed files ==="
+          cat changed_files.txt
+
+          BUILT_IMAGES=""
+
+          add_image() {
+            for img in "$@"; do
+              case " $BUILT_IMAGES " in
+                *" $img "*) ;;
+                *) BUILT_IMAGES="$BUILT_IMAGES $img" ;;
+              esac
+            done
+          }
+
+          has_image() {
+            case " $BUILT_IMAGES " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+          }
+
+          build_all() {
+            local target="$1"
+            echo "Simulate: BUILD_TARGET=$target docker buildx bake --push"
+            case "$target" in
+              admin)       add_image admin-api admin-web ;;
+              participant) add_image participant-api participant-web ;;
+              operator)    add_image operator-api operator-web ;;
+            esac
+          }
+
+          build_backend() {
+            local target="$1"
+            echo "Simulate: BUILD_TARGET=$target docker buildx bake backend --push"
+            add_image "${target}-api"
+          }
+
+          build_frontend() {
+            local target="$1"
+            echo "Simulate: BUILD_TARGET=$target docker buildx bake frontend --push"
+            add_image "${target}-web"
+          }
+
+          build_worker() {
+            local target="$1"
+            echo "Simulate: BUILD_TARGET=$target docker buildx bake worker --push"
+            add_image "${target}-worker"
+          }
+
+          # Base images
+          BASE_CHANGED=false
+          if grep -q '^scripts/Dockerfile.base.api' changed_files.txt || grep -q '^docker-bake.hcl' changed_files.txt; then
+            echo "Simulate: docker buildx bake base-api --push"
+            BASE_CHANGED=true
+          fi
+          if grep -q '^scripts/Dockerfile.base.web' changed_files.txt || grep -q '^docker-bake.hcl' changed_files.txt; then
+            echo "Simulate: docker buildx bake base-web --push"
+            BASE_CHANGED=true
+          fi
+
+          # Base or common changed → rebuild all
+          if [ "$BASE_CHANGED" = "true" ] || grep -q '^packages/common' changed_files.txt; then
+            build_all admin
+            build_all participant
+            build_all operator
+            build_worker submission
+            build_worker scheduler
+          else
+            # api-shared → all backends + workers
+            if grep -q '^packages/api-shared' changed_files.txt; then
+              build_backend admin
+              build_backend participant
+              build_backend operator
+              build_worker submission
+              build_worker scheduler
+            fi
+
+            # web-shared → all frontends
+            if grep -q '^packages/web-shared' changed_files.txt; then
+              build_frontend admin
+              build_frontend participant
+              build_frontend operator
+            fi
+
+            # Individual app changes (skip if already built via shared package)
+            grep -q '^apps/workers/submission' changed_files.txt && ! has_image submission-worker && build_worker submission
+            grep -q '^apps/workers/scheduler' changed_files.txt && ! has_image scheduler-worker && build_worker scheduler
+            grep -q '^apps/apis/admin' changed_files.txt && ! has_image admin-api && build_backend admin
+            grep -q '^apps/apis/participant' changed_files.txt && ! has_image participant-api && build_backend participant
+            grep -q '^apps/apis/operator' changed_files.txt && ! has_image operator-api && build_backend operator
+            grep -q '^apps/webs/admin' changed_files.txt && ! has_image admin-web && build_frontend admin
+            grep -q '^apps/webs/participant' changed_files.txt && ! has_image participant-web && build_frontend participant
+            grep -q '^apps/webs/operator' changed_files.txt && ! has_image operator-web && build_frontend operator
+          fi
+
+          echo "built_images=${BUILT_IMAGES# }" >> "$GITHUB_OUTPUT"
+
+      - name: Simulate retag built images
+        if: ${{ inputs.channel_tag != '' }}
+        env:
+          CHANNEL_TAG: ${{ inputs.channel_tag }}
+          BUILT_IMAGES: ${{ steps.build.outputs.built_images }}
+        run: |
+          SHORT_SHA="${FEATURE_HEAD:0:8}"
+          for img in $BUILT_IMAGES; do
+            echo "Simulate: retag ${IMAGE_REPOSITORY}/${img}:${APP_VERSION} → sha-${SHORT_SHA}, ${CHANNEL_TAG}"
+          done
+
+      - name: Write summary
+        if: ${{ always() }}
+        env:
+          BUILT_IMAGES: ${{ steps.build.outputs.built_images }}
+          CHANNEL_TAG: ${{ inputs.channel_tag }}
+        run: |
+          {
+            printf '%s\n' '## Build Summary'
+            printf '%s\n' "- image_tag: \`${APP_VERSION}\`"
+            printf '%s\n' "- last_head: \`${LAST_HEAD}\`"
+            printf '%s\n' "- feature_head: \`${FEATURE_HEAD}\`"
+            printf '%s\n' "- built_images: \`${BUILT_IMAGES:-none}\`"
+            [ -n "$CHANNEL_TAG" ] && printf '%s\n' "- channel_tag: \`${CHANNEL_TAG}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

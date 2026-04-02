@@ -1,4 +1,4 @@
-name: Channel Calculate Tag
+name: Job Validate Image Tag
 
 on:
   workflow_call:
@@ -25,6 +25,9 @@ on:
       prev_tag:
         description: Previous comparable tag
         value: ${{ jobs.calculate.outputs.prev_tag }}
+      prev_tag_sha:
+        description: Commit SHA of the previous comparable tag
+        value: ${{ jobs.calculate.outputs.prev_tag_sha }}
       stable_version:
         description: Manual stable version input
         value: ${{ jobs.calculate.outputs.stable_version }}
@@ -40,6 +43,7 @@ jobs:
       resolved_sha: ${{ steps.calculate.outputs.resolved_sha }}
       next_tag: ${{ steps.calculate.outputs.next_tag }}
       prev_tag: ${{ steps.calculate.outputs.prev_tag }}
+      prev_tag_sha: ${{ steps.calculate.outputs.prev_tag_sha }}
       stable_version: ${{ steps.calculate.outputs.stable_version }}
     steps:
       - name: Checkout repository
@@ -96,9 +100,23 @@ jobs:
             LAST_CHANNEL_NUMBER="$(echo "$LAST_CHANNEL_TAG" | sed -nE "s/^${NORMALIZED_STABLE_VERSION}-${RELEASE_ENVIRONMENT}\.([0-9]+)$/\\1/p")"
             NEXT_CHANNEL_NUMBER=$((LAST_CHANNEL_NUMBER + 1))
             PREV_TAG="$LAST_CHANNEL_TAG"
+            PREV_TAG_SHA="$(git rev-parse "${LAST_CHANNEL_TAG}^{commit}")"
           else
             NEXT_CHANNEL_NUMBER=1
-            PREV_TAG="$NORMALIZED_STABLE_VERSION"
+            # Check if stable tag exists; if not, fall back to the previous stable tag
+            if git rev-parse -q --verify "refs/tags/${NORMALIZED_STABLE_VERSION}" >/dev/null 2>&1; then
+              PREV_TAG="$NORMALIZED_STABLE_VERSION"
+              PREV_TAG_SHA="$(git rev-parse "${NORMALIZED_STABLE_VERSION}^{commit}")"
+            else
+              PREV_STABLE_TAG="$(git tag --list 'v*.*.*' | grep -v -- '-' | sort -V | tail -1 || true)"
+              if [ -n "$PREV_STABLE_TAG" ]; then
+                PREV_TAG="$PREV_STABLE_TAG"
+                PREV_TAG_SHA="$(git rev-parse "${PREV_STABLE_TAG}^{commit}")"
+              else
+                PREV_TAG=""
+                PREV_TAG_SHA="$(git rev-list --max-parents=0 HEAD)"
+              fi
+            fi
           fi
 
           NEXT_TAG="${NORMALIZED_STABLE_VERSION}-${RELEASE_ENVIRONMENT}.${NEXT_CHANNEL_NUMBER}"
@@ -108,6 +126,7 @@ jobs:
             echo "resolved_sha=$RESOLVED_SHA"
             echo "next_tag=$NEXT_TAG"
             echo "prev_tag=$PREV_TAG"
+            echo "prev_tag_sha=$PREV_TAG_SHA"
             echo "stable_version=$NORMALIZED_STABLE_VERSION"
           } >> "$GITHUB_OUTPUT"
 

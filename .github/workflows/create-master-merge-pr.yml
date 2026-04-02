@@ -1,0 +1,126 @@
+name: Create Master Merge PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      stable_version:
+        description: "릴리즈 stable 버전. 예: v1.2.3 또는 1.2.3"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.inputs.stable_version }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-master-merge-pr:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REF: ${{ github.ref_name }}
+      INPUT_STABLE_VERSION: ${{ github.event.inputs.stable_version }}
+      BRANCH_NAME: chore/master-merge-${{ github.run_id }}
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Validate stable version and existing tag
+        id: validate
+        run: |
+          set -euo pipefail
+
+          if [[ "$INPUT_STABLE_VERSION" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            PACKAGE_VERSION="${BASH_REMATCH[1]}"
+          elif [[ "$INPUT_STABLE_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            PACKAGE_VERSION="${BASH_REMATCH[1]}"
+          else
+            echo "Unsupported stable version format: $INPUT_STABLE_VERSION" >&2
+            exit 1
+          fi
+
+          TAG_VERSION="v${PACKAGE_VERSION}"
+
+          git fetch --force --tags --prune origin
+
+          if git rev-parse -q --verify "refs/tags/${TAG_VERSION}" >/dev/null 2>&1; then
+            echo "Tag already exists: ${TAG_VERSION}" >&2
+            exit 1
+          fi
+
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag_version=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Detect monorepo structure
+        id: monorepo
+        run: |
+          if [ -f turbo.json ]; then
+            echo "type=turbo" >> "$GITHUB_OUTPUT"
+          elif jq -e '.workspaces' package.json >/dev/null 2>&1; then
+            echo "type=npm-workspaces" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unsupported monorepo structure" >&2
+            exit 1
+          fi
+
+      - name: Update package versions
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r file; do
+            tmp_file="$(mktemp)"
+            jq --arg version "${{ steps.validate.outputs.package_version }}" '.version = $version' "$file" > "$tmp_file"
+            mv "$tmp_file" "$file"
+          done < <(find . \
+            -path './node_modules' -prune -o \
+            -path './.git' -prune -o \
+            -name package.json -print | sort)
+
+      - name: Check for version changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release branch and push
+        if: ${{ steps.changes.outputs.has_changes == 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME"
+          git add .
+          git commit -m "chore: prepare master merge for ${{ steps.validate.outputs.tag_version }}"
+          git push origin "$BRANCH_NAME"
+
+      - name: Create pull request
+        id: create_pr
+        if: ${{ steps.changes.outputs.has_changes == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr_url="$(gh pr create \
+            --base "$SOURCE_REF" \
+            --head "$BRANCH_NAME" \
+            --title "release ${{ steps.validate.outputs.tag_version }}" \
+            --body $'## Summary\n\n- stable_version: `${{ steps.validate.outputs.tag_version }}`\n- monorepo_type: `${{ steps.monorepo.outputs.type }}`\n\n## Notes\n\nmaster merge 전 버전 정렬 PR 자동 생성함.')"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Write summary
+        run: |
+          {
+            printf '%s\n' '## Master Merge PR'
+            printf '%s\n' "- base_branch: \`${SOURCE_REF}\`"
+            printf '%s\n' "- stable_version: \`${{ steps.validate.outputs.tag_version }}\`"
+            printf '%s\n' "- monorepo_type: \`${{ steps.monorepo.outputs.type }}\`"
+            printf '%s\n' "- changes_detected: \`${{ steps.changes.outputs.has_changes }}\`"
+            printf '%s\n' "- branch: \`${BRANCH_NAME}\`"
+            printf '%s\n' "- pr_url: \`${{ steps.create_pr.outputs.url || 'not_created' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

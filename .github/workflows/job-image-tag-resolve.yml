@@ -1,4 +1,4 @@
-name: Channel Push Tag
+name: Job Image Tag Resolve
 
 on:
   workflow_call:
@@ -9,30 +9,20 @@ on:
       target_sha:
         required: true
         type: string
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: Tag to push
-        required: true
-        type: string
-      target_sha:
-        description: Commit sha to tag
-        required: true
-        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag_name || github.event.inputs.tag_name }}
+  group: ${{ github.workflow }}-${{ inputs.tag_name }}
   cancel-in-progress: true
 
 jobs:
   push-tag:
     runs-on: ubuntu-latest
     env:
-      TAG_NAME: ${{ inputs.tag_name || github.event.inputs.tag_name }}
-      TARGET_SHA: ${{ inputs.target_sha || github.event.inputs.target_sha }}
+      TAG_NAME: ${{ inputs.tag_name }}
+      TARGET_SHA: ${{ inputs.target_sha }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

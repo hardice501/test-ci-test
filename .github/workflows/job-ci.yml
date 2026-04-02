@@ -1,0 +1,142 @@
+name: Job CI
+
+on:
+  pull_request:
+    branches: ["**"]
+    types: [labeled, unlabeled, opened, synchronize, reopened]
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      resolved_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.resolved_sha || github.ref || github.run_id }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  pull-request-ci:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Fetch target branch
+        run: git fetch origin "${{ github.base_ref }}"
+
+      - name: Install packages
+        run: yarn install --frozen-lockfile
+
+      - name: Check if "console.log" is used
+        run: |
+          if bash scripts/is_contain.sh "^\+.*(console\.log|console\.error)"; then
+            echo "console.log is used, please remove it before merging" >&2
+            gh pr comment "$PR_URL" --body "console.log 발견 👀"
+            exit 1
+          fi
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check lint
+        run: |
+          if bash scripts/is_package_updated.sh 'apps|libs|packages'; then
+            yarn lint
+          else
+            echo "No code changes, skip lint check"
+          fi
+
+      - name: Build apps
+        run: yarn build --filter=...[${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}]
+
+      - name: Check types
+        run: yarn type-check --filter=...[${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}]
+
+      - name: Run tests
+        id: tests
+        run: |
+          bash scripts/run_coverage.sh || exit $?
+          if [ -f coverage/coverage-summary.json ]; then
+            echo "has_coverage=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_coverage=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report coverage
+        if: ${{ steps.tests.outputs.has_coverage == 'true' }}
+        uses: davelosert/vitest-coverage-report-action@v2
+        with:
+          json-summary-path: ./coverage/coverage-summary.json
+          json-final-path: ./coverage/coverage-final.json
+
+      - name: Write summary
+        if: ${{ always() }}
+        run: |
+          {
+            printf '%s\n' '## Pull Request CI'
+            printf '%s\n' "- base_ref: \`${{ github.base_ref }}\`"
+            printf '%s\n' "- head_ref: \`${{ github.head_ref }}\`"
+            printf '%s\n' "- base_sha: \`${{ github.event.pull_request.base.sha }}\`"
+            printf '%s\n' "- head_sha: \`${{ github.event.pull_request.head.sha }}\`"
+            printf '%s\n' "- lint: \`passed\`"
+            printf '%s\n' "- build: \`passed\`"
+            printf '%s\n' "- type-check: \`passed\`"
+            printf '%s\n' "- test: \`passed\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  workflow-call-ci:
+    if: ${{ github.event_name == 'workflow_call' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target ref
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.resolved_sha }}
+
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Install packages
+        run: yarn install --frozen-lockfile
+
+      - name: Run lint
+        run: yarn lint
+
+      - name: Run type-check
+        run: yarn type-check
+
+      - name: Run tests
+        run: yarn test --run
+
+      - name: Write summary
+        run: |
+          {
+            printf '%s\n' '## Channel CI'
+            printf '%s\n' "- source_ref: \`${{ inputs.source_ref }}\`"
+            printf '%s\n' "- resolved_sha: \`${{ inputs.resolved_sha }}\`"
+            printf '%s\n' "- lint: \`passed\`"
+            printf '%s\n' "- type-check: \`passed\`"
+            printf '%s\n' "- test: \`passed\`"
+          } >> "$GITHUB_STEP_SUMMARY"
