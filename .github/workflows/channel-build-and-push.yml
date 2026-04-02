@@ -65,6 +65,30 @@ jobs:
           prefix="$(echo "$RELEASE_ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
           echo "value=$prefix" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve release image tags
+        id: image_tags
+        run: |
+          short_sha="$(printf '%s' "$TARGET_SHA" | cut -c1-8)"
+
+          case "$RELEASE_ENVIRONMENT" in
+            rc)
+              channel_tag="staging"
+              ;;
+            hotfix)
+              channel_tag="production"
+              ;;
+            loadtest)
+              channel_tag="loadtest"
+              ;;
+            *)
+              echo "Unsupported environment: $RELEASE_ENVIRONMENT" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "channel_tag=$channel_tag" >> "$GITHUB_OUTPUT"
+
       - name: Skip AWS login for ci-test
         run: |
           echo "Skip AWS credential and ECR login in ci-test"
@@ -101,16 +125,24 @@ jobs:
           echo "Skip base image push in ci-test"
 
       - name: Build all application images
+        env:
+          SHORT_SHA: ${{ steps.image_tags.outputs.short_sha }}
+          CHANNEL_TAG: ${{ steps.image_tags.outputs.channel_tag }}
         run: |
           echo "Skip application image push in ci-test"
+          echo "Simulate additional tags: ${APP_VERSION}, sha-${SHORT_SHA}, ${CHANNEL_TAG}"
 
       - name: Write summary
+        env:
+          SHORT_SHA: ${{ steps.image_tags.outputs.short_sha }}
+          CHANNEL_TAG: ${{ steps.image_tags.outputs.channel_tag }}
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Build Inputs
           - source_ref: \`${TARGET_REF}\`
           - resolved_sha: \`${TARGET_SHA}\`
-          - prev_tag: \`${PREV_TAG}\`
-          - current_tag: \`${APP_VERSION}\`
+          - image_tag: \`${APP_VERSION}\`
           - environment: \`${RELEASE_ENVIRONMENT}\`
+          - short_sha_tag: \`sha-${SHORT_SHA}\`
+          - channel_tag: \`${CHANNEL_TAG}\`
           EOF

@@ -121,9 +121,9 @@ jobs:
         run: |
           {
             printf '%s\n' '## Channel Metadata'
-            printf '%s\n' "- source_ref: ${SOURCE_REF}"
-            printf '%s\n' "- resolved_ref: ${RESOLVED_REF}"
-            printf '%s\n' "- resolved_sha: ${RESOLVED_SHA}"
-            printf '%s\n' "- environment: ${RELEASE_ENVIRONMENT}"
-            printf '%s\n' "- stable_version: ${NORMALIZED_STABLE_VERSION}"
+            printf '%s\n' "- source_ref: \`${SOURCE_REF}\`"
+            printf '%s\n' "- resolved_ref: \`${RESOLVED_REF}\`"
+            printf '%s\n' "- resolved_sha: \`${RESOLVED_SHA}\`"
+            printf '%s\n' "- environment: \`${RELEASE_ENVIRONMENT}\`"
+            printf '%s\n' "- stable_version: \`${NORMALIZED_STABLE_VERSION}\`"
           } >> "$GITHUB_STEP_SUMMARY"

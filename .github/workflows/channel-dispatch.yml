@@ -84,8 +84,7 @@ jobs:
           - stable_version: \`${{ github.event.inputs.stable_version }}\`
           - resolved_sha: \`${{ needs.calculate.outputs.resolved_sha }}\`
           - ci_result: \`${{ needs.ci.result }}\`
-          - prev_tag: \`${{ needs.calculate.outputs.prev_tag }}\`
-          - next_tag: \`${{ needs.calculate.outputs.next_tag }}\`
+          - image_tag: \`${{ needs.calculate.outputs.next_tag }}\`
           - build_result: \`${{ needs.build-and-push.result }}\`
           - tag_push_result: \`${{ needs.push-tag.result || 'skipped' }}\`
           - values_pr_result: \`${{ needs.update-values-pr.result }}\`
