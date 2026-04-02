@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build-and-push:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     env:
       BASE_VERSION: latest
       APP_VERSION: ${{ inputs.current_tag }}

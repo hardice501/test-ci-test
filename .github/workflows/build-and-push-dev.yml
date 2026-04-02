@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build-and-push:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     env:
       BASE_VERSION: latest
       IMAGE_REPOSITORY: ci-test
