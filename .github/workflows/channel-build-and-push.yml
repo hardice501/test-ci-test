@@ -20,7 +20,6 @@ on:
         type: string
 
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -33,7 +32,7 @@ jobs:
     env:
       BASE_VERSION: latest
       APP_VERSION: ${{ inputs.current_tag }}
-      IMAGE_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      IMAGE_REPOSITORY: ci-test
       TARGET_SHA: ${{ inputs.resolved_sha }}
       TARGET_REF: ${{ inputs.source_ref }}
       PREV_TAG: ${{ inputs.prev_tag }}
@@ -66,15 +65,9 @@ jobs:
           prefix="$(echo "$RELEASE_ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
           echo "value=$prefix" >> "$GITHUB_OUTPUT"
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Skip AWS login for ci-test
+        run: |
+          echo "Skip AWS credential and ECR login in ci-test"
 
       - name: Create apps/webs/admin/.env.production file
         run: |
@@ -105,16 +98,11 @@ jobs:
 
       - name: Build base images
         run: |
-          docker buildx bake base-api --push
-          docker buildx bake base-web --push
+          echo "Skip base image push in ci-test"
 
       - name: Build all application images
         run: |
-          BUILD_TARGET=admin docker buildx bake --push
-          BUILD_TARGET=participant docker buildx bake --push
-          BUILD_TARGET=operator docker buildx bake --push
-          BUILD_TARGET=submission docker buildx bake worker --push
-          BUILD_TARGET=scheduler docker buildx bake worker --push
+          echo "Skip application image push in ci-test"
 
       - name: Write summary
         run: |

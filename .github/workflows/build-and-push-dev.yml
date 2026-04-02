@@ -6,8 +6,7 @@ on:
       - dev
 
 permissions:
-  id-token: write # This is required for requesting the JWT
-  contents: read # This is required for actions/checkout
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-build
@@ -18,7 +17,7 @@ jobs:
     runs-on: self-hosted
     env:
       BASE_VERSION: latest
-      IMAGE_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      IMAGE_REPOSITORY: ci-test
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,15 +41,9 @@ jobs:
           echo "version=$APP_VERSION" >> $GITHUB_OUTPUT
           echo "Version tag: $APP_VERSION"
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Skip AWS login for ci-test
+        run: |
+          echo "Skip AWS credential and ECR login in ci-test"
 
       - name: Create apps/webs/admin/.env.production file
         run: |
@@ -81,13 +74,13 @@ jobs:
           if grep -q '^scripts/Dockerfile.base.api' changed_files.txt || grep -q '^docker-bake.hcl' changed_files.txt; then
             BASE_API_CHANGED=true
             echo "Building base-api image..."
-            docker buildx bake base-api --push
+            echo "Skip base-api push in ci-test"
           fi
 
           if grep -q '^scripts/Dockerfile.base.web' changed_files.txt || grep -q '^docker-bake.hcl' changed_files.txt; then
             BASE_WEB_CHANGED=true
             echo "Building base-web image..."
-            docker buildx bake base-web --push
+            echo "Skip base-web push in ci-test"
           fi
 
           if [ "$BASE_API_CHANGED" = "true" ] || [ "$BASE_WEB_CHANGED" = "true" ]; then
@@ -104,20 +97,12 @@ jobs:
           if [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if  grep -q '^packages/common' changed_files.txt; then
               echo "changed=true" >> $GITHUB_OUTPUT
-              BUILD_TARGET=admin docker buildx bake --push
-              BUILD_TARGET=participant docker buildx bake --push
-              BUILD_TARGET=operator docker buildx bake --push
-              BUILD_TARGET=submission docker buildx bake worker --push
-              BUILD_TARGET=scheduler docker buildx bake worker --push
+              echo "Skip common package push in ci-test"
             fi
           else
             # Base images changed, rebuild all services
             echo "changed=true" >> $GITHUB_OUTPUT
-            BUILD_TARGET=admin docker buildx bake --push
-            BUILD_TARGET=participant docker buildx bake --push
-            BUILD_TARGET=operator docker buildx bake --push
-            BUILD_TARGET=submission docker buildx bake worker --push
-            BUILD_TARGET=scheduler docker buildx bake worker --push
+            echo "Skip rebuild after base image change in ci-test"
           fi
 
       - name: Check and build if packages/api-shared changed
@@ -128,11 +113,7 @@ jobs:
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^packages/api-shared' changed_files.txt; then
               echo "changed=true" >> $GITHUB_OUTPUT
-              BUILD_TARGET=admin docker buildx bake backend --push
-              BUILD_TARGET=participant docker buildx bake backend --push
-              BUILD_TARGET=operator docker buildx bake backend --push
-              BUILD_TARGET=submission docker buildx bake worker --push
-              BUILD_TARGET=scheduler docker buildx bake worker --push
+              echo "Skip api-shared push in ci-test"
             fi
           fi
 
@@ -144,9 +125,7 @@ jobs:
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^packages/web-shared' changed_files.txt; then
               echo "changed=true" >> $GITHUB_OUTPUT
-              BUILD_TARGET=admin docker buildx bake frontend --push
-              BUILD_TARGET=participant docker buildx bake frontend --push
-              BUILD_TARGET=operator docker buildx bake frontend --push
+              echo "Skip web-shared push in ci-test"
             fi
           fi
 
@@ -156,7 +135,7 @@ jobs:
         run: |
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^apps/workers/submission' changed_files.txt; then
-              BUILD_TARGET=submission docker buildx bake worker --push
+              echo "Skip submission worker push in ci-test"
             fi
           fi
       - name: Check and build if workers/scheduler changed
@@ -165,7 +144,7 @@ jobs:
         run: |
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^apps/workers/scheduler' changed_files.txt; then
-              BUILD_TARGET=scheduler docker buildx bake worker --push
+              echo "Skip scheduler worker push in ci-test"
             fi
           fi
       - name: Check and build if apis/admin changed
@@ -174,7 +153,7 @@ jobs:
         run: |
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^apps/apis/admin' changed_files.txt; then
-              BUILD_TARGET=admin docker buildx bake backend --push
+              echo "Skip admin api push in ci-test"
             fi
           fi
 
@@ -184,7 +163,7 @@ jobs:
         run: |
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^apps/apis/participant' changed_files.txt; then
-              BUILD_TARGET=participant docker buildx bake backend --push
+              echo "Skip participant api push in ci-test"
             fi
           fi
 
@@ -194,7 +173,7 @@ jobs:
         run: |
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_api_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^apps/apis/operator' changed_files.txt; then
-              BUILD_TARGET=operator docker buildx bake backend --push
+              echo "Skip operator api push in ci-test"
             fi
           fi
 
@@ -204,7 +183,7 @@ jobs:
         run: |
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_web_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^apps/webs/admin' changed_files.txt; then
-              BUILD_TARGET=admin docker buildx bake frontend --push
+              echo "Skip admin web push in ci-test"
             fi
           fi
 
@@ -214,7 +193,7 @@ jobs:
         run: |
           if [ "${{ steps.check_common.outputs.changed }}" != "true" ] && [ "${{ steps.check_web_shared.outputs.changed }}" != "true" ] && [ "${{ steps.check_base_images.outputs.changed }}" != "true" ]; then
             if grep -q '^apps/webs/participant' changed_files.txt; then
-              BUILD_TARGET=participant docker buildx bake frontend --push
+              echo "Skip participant web push in ci-test"
             fi
           fi
 

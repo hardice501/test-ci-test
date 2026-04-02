@@ -10,7 +10,9 @@ on:
         required: true
         type: string
     secrets:
-      GITHUB_APP_SECRET:
+      GIT_APP_ID:
+        required: true
+      GIT_APP_SECRET:
         required: true
 
 permissions:
@@ -52,8 +54,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ vars.GITHUB_APP_ID }}
-          private-key: ${{ secrets.GITHUB_APP_SECRET }}
+          app-id: ${{ secrets.GIT_APP_ID }}
+          private-key: ${{ secrets.GIT_APP_SECRET }}
           owner: ${{ github.repository_owner }}
 
       - name: Checkout values repository
