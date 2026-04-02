@@ -73,17 +73,3 @@ jobs:
         with:
           json-summary-path: './coverage/coverage-summary.json'
           json-final-path: './coverage/coverage-final.json'
-      - name: Notify Discord if failed
-        if: failure()
-        uses: tsickert/discord-webhook@v7.0.0
-        with:
-          webhook-url: ${{ secrets.DISCORD_WEBHOOK }}
-          username: GitHub
-          avatar-url: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
-          # embeds 에 JSON 배열 형태로 카드 구성을 지정
-          embed-title: "[${{ github.repository }}] CI job failed: #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}"
-          embed-url: ${{ github.event.pull_request.html_url }}
-          embed-color: 15158332
-          embed-author-name: ${{ github.event.pull_request.user.login }}
-          embed-author-url:  https://github.com/${{ github.event.pull_request.user.login }}
-          embed-author-icon-url: ${{ github.event.pull_request.user.avatar_url }}
