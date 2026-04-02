@@ -1,4 +1,4 @@
-name: Image Build Push on Tag
+name: Manual Image Build Push on Tag
 
 on:
   workflow_dispatch:

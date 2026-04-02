@@ -22,14 +22,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pr:
-    if: ${{ github.event_name == 'pull_request' }}
+  run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ inputs.resolved_sha || '' }}
 
       - name: Use Node.js 20.x
         uses: actions/setup-node@v5
@@ -39,12 +39,14 @@ jobs:
           cache-dependency-path: yarn.lock
 
       - name: Fetch target branch
+        if: ${{ github.event_name == 'pull_request' }}
         run: git fetch origin "${{ github.base_ref }}"
 
       - name: Install packages
         run: yarn install --frozen-lockfile
 
       - name: Check if "console.log" is used
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
           if bash scripts/is_contain.sh "^\+.*(console\.log|console\.error)"; then
             echo "console.log is used, please remove it before merging" >&2
@@ -55,32 +57,46 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check lint
+      - name: Run lint
         run: |
-          if bash scripts/is_package_updated.sh 'apps|libs|packages'; then
-            yarn lint
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            if bash scripts/is_package_updated.sh 'apps|libs|packages'; then
+              yarn lint
+            else
+              echo "No code changes, skip lint check"
+            fi
           else
-            echo "No code changes, skip lint check"
+            yarn lint
           fi
 
       - name: Build apps
+        if: ${{ github.event_name == 'pull_request' }}
         run: yarn build --filter=...[${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}]
 
-      - name: Check types
-        run: yarn type-check --filter=...[${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}]
+      - name: Run type-check
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            yarn type-check --filter=...[${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}]
+          else
+            yarn type-check
+          fi
 
       - name: Run tests
         id: tests
         run: |
-          bash scripts/run_coverage.sh || exit $?
-          if [ -f coverage/coverage-summary.json ]; then
-            echo "has_coverage=true" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            bash scripts/run_coverage.sh || exit $?
+            if [ -f coverage/coverage-summary.json ]; then
+              echo "has_coverage=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_coverage=false" >> "$GITHUB_OUTPUT"
+            fi
           else
-            echo "has_coverage=false" >> "$GITHUB_OUTPUT"
+            yarn test --run
           fi
 
       - name: Report coverage
-        if: ${{ steps.tests.outputs.has_coverage == 'true' }}
+        if: ${{ github.event_name == 'pull_request' && steps.tests.outputs.has_coverage == 'true' }}
         uses: davelosert/vitest-coverage-report-action@v2
         with:
           json-summary-path: ./coverage/coverage-summary.json
@@ -89,54 +105,39 @@ jobs:
       - name: Write summary
         if: ${{ always() }}
         run: |
-          {
-            printf '%s\n' '## Pull Request CI'
-            printf '%s\n' "- base_ref: \`${{ github.base_ref }}\`"
-            printf '%s\n' "- head_ref: \`${{ github.head_ref }}\`"
-            printf '%s\n' "- base_sha: \`${{ github.event.pull_request.base.sha }}\`"
-            printf '%s\n' "- head_sha: \`${{ github.event.pull_request.head.sha }}\`"
-            printf '%s\n' "- lint: \`passed\`"
-            printf '%s\n' "- build: \`passed\`"
-            printf '%s\n' "- type-check: \`passed\`"
-            printf '%s\n' "- test: \`passed\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            {
+              printf '%s\n' '## Pull Request CI'
+              printf '%s\n' "- base_ref: \`${{ github.base_ref }}\`"
+              printf '%s\n' "- head_ref: \`${{ github.head_ref }}\`"
+              printf '%s\n' "- base_sha: \`${{ github.event.pull_request.base.sha }}\`"
+              printf '%s\n' "- head_sha: \`${{ github.event.pull_request.head.sha }}\`"
+              printf '%s\n' "- lint: \`passed\`"
+              printf '%s\n' "- build: \`passed\`"
+              printf '%s\n' "- type-check: \`passed\`"
+              printf '%s\n' "- test: \`passed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              printf '%s\n' '## Channel CI'
+              printf '%s\n' "- source_ref: \`${{ inputs.source_ref }}\`"
+              printf '%s\n' "- resolved_sha: \`${{ inputs.resolved_sha }}\`"
+              printf '%s\n' "- lint: \`passed\`"
+              printf '%s\n' "- type-check: \`passed\`"
+              printf '%s\n' "- test: \`passed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-  channel:
-    if: ${{ github.event_name == 'workflow_call' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout target ref
-        uses: actions/checkout@v5
+      - name: Notify Discord if failed
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        uses: tsickert/discord-webhook@v7.0.0
         with:
-          fetch-depth: 0
-          ref: ${{ inputs.resolved_sha }}
-
-      - name: Use Node.js 20.x
-        uses: actions/setup-node@v5
-        with:
-          node-version: 20
-          cache: yarn
-          cache-dependency-path: yarn.lock
-
-      - name: Install packages
-        run: yarn install --frozen-lockfile
-
-      - name: Run lint
-        run: yarn lint
-
-      - name: Run type-check
-        run: yarn type-check
-
-      - name: Run tests
-        run: yarn test --run
-
-      - name: Write summary
-        run: |
-          {
-            printf '%s\n' '## Channel CI'
-            printf '%s\n' "- source_ref: \`${{ inputs.source_ref }}\`"
-            printf '%s\n' "- resolved_sha: \`${{ inputs.resolved_sha }}\`"
-            printf '%s\n' "- lint: \`passed\`"
-            printf '%s\n' "- type-check: \`passed\`"
-            printf '%s\n' "- test: \`passed\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK }}
+          username: GitHub
+          avatar-url: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
+          embed-title: "[${{ github.repository }}] CI job failed: #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}"
+          embed-url: ${{ github.event.pull_request.html_url }}
+          embed-color: 15158332
+          embed-author-name: ${{ github.event.pull_request.user.login }}
+          embed-author-url: https://github.com/${{ github.event.pull_request.user.login }}
+          embed-author-icon-url: ${{ github.event.pull_request.user.avatar_url }}

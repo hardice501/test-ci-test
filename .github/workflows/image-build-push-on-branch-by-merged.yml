@@ -1,4 +1,4 @@
-name: Image Build Push on Branch
+name: Image Build Push on Branch by Merged
 
 on:
   push:

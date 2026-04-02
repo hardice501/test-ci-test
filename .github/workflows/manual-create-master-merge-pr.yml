@@ -1,4 +1,4 @@
-name: Create Master Merge PR
+name: Manual Create Master Merge PR
 
 on:
   workflow_dispatch:
