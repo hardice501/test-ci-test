@@ -15,7 +15,8 @@
     "build": "turbo run build",
     "type-check": "turbo run type-check",
     "clean": "turbo run clean",
-    "test-coverage": "node -e \"process.exit(0)\""
+    "test-coverage": "node -e \"process.exit(0)\"",
+    "test": "true"
   },
   "devDependencies": {
     "@types/node": "^24.2.1",

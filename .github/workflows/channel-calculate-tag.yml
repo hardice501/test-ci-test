@@ -112,12 +112,18 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Write summary
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RESOLVED_REF: ${{ steps.calculate.outputs.resolved_ref }}
+          RESOLVED_SHA: ${{ steps.calculate.outputs.resolved_sha }}
+          RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+          NORMALIZED_STABLE_VERSION: ${{ steps.calculate.outputs.stable_version }}
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Channel Metadata
-          - source_ref: `${{ inputs.source_ref }}`
-          - resolved_ref: `${{ steps.calculate.outputs.resolved_ref }}`
-          - resolved_sha: `${{ steps.calculate.outputs.resolved_sha }}`
-          - environment: `${{ inputs.environment }}`
-          - stable_version: `${{ steps.calculate.outputs.stable_version }}`
+          - source_ref: `${SOURCE_REF}`
+          - resolved_ref: `${RESOLVED_REF}`
+          - resolved_sha: `${RESOLVED_SHA}`
+          - environment: `${RELEASE_ENVIRONMENT}`
+          - stable_version: `${NORMALIZED_STABLE_VERSION}`
           EOF
