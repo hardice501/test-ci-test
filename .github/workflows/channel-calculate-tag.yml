@@ -121,9 +121,9 @@ jobs:
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Channel Metadata
-          - source_ref: `${SOURCE_REF}`
-          - resolved_ref: `${RESOLVED_REF}`
-          - resolved_sha: `${RESOLVED_SHA}`
-          - environment: `${RELEASE_ENVIRONMENT}`
-          - stable_version: `${NORMALIZED_STABLE_VERSION}`
+          - source_ref: \`${SOURCE_REF}\`
+          - resolved_ref: \`${RESOLVED_REF}\`
+          - resolved_sha: \`${RESOLVED_SHA}\`
+          - environment: \`${RELEASE_ENVIRONMENT}\`
+          - stable_version: \`${NORMALIZED_STABLE_VERSION}\`
           EOF

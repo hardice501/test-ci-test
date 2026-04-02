@@ -117,22 +117,6 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Configure git user
-        if: steps.changes.outputs.has_changes == 'true'
-        working-directory: values-repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "zkrypto@zkrypto.com"
-
-      - name: Commit and push branch
-        if: steps.changes.outputs.has_changes == 'true'
-        working-directory: values-repo
-        run: |
-          git checkout -b "$BRANCH_NAME"
-          git add .
-          git commit -m "chore: update ${CHANNEL_ENVIRONMENT} image tag to ${IMAGE_TAG}"
-          git push origin "$BRANCH_NAME"
-
       - name: Create pull request
         if: steps.changes.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v7
@@ -141,6 +125,9 @@ jobs:
           path: values-repo
           branch: ${{ env.BRANCH_NAME }}
           base: main
+          add-paths: .
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           title: "chore: update ${{ inputs.environment }} image tag to ${{ inputs.version }}"
           commit-message: "chore: update ${{ inputs.environment }} image tag to ${{ inputs.version }}"
           body: |
@@ -166,12 +153,13 @@ jobs:
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Values PR
-          - repository: `${TARGET_REPOSITORY}`
-          - script_path: `${SCRIPT_PATH}`
-          - services: `${TARGET_SERVICES}`
-          - channel_environment: `${CHANNEL_ENVIRONMENT}`
-          - target_environment: `${{ steps.resolve-environment.outputs.value }}`
-          - image_tag: `${IMAGE_TAG}`
-          - branch: `${BRANCH_NAME}`
-          - changes_detected: `${{ steps.changes.outputs.has_changes }}`
+          - repository: \`${TARGET_REPOSITORY}\`
+          - script_path: \`${SCRIPT_PATH}\`
+          - services: \`${TARGET_SERVICES}\`
+          - channel_environment: \`${CHANNEL_ENVIRONMENT}\`
+          - target_environment: \`${{ steps.resolve-environment.outputs.value }}\`
+          - image_tag: \`${IMAGE_TAG}\`
+          - branch: \`${BRANCH_NAME}\`
+          - changes_detected: \`${{ steps.changes.outputs.has_changes }}\`
+          - pr_action: \`create-pull-request\`
           EOF

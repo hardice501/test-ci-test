@@ -50,9 +50,9 @@ jobs:
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Channel CI
-          - source_ref: `${{ inputs.source_ref }}`
-          - resolved_sha: `${{ inputs.resolved_sha }}`
-          - lint: `passed`
-          - type-check: `passed`
-          - test: `passed`
+          - source_ref: \`${{ inputs.source_ref }}\`
+          - resolved_sha: \`${{ inputs.resolved_sha }}\`
+          - lint: \`passed\`
+          - type-check: \`passed\`
+          - test: \`passed\`
           EOF

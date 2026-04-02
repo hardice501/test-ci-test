@@ -108,9 +108,9 @@ jobs:
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Build Inputs
-          - source_ref: `${TARGET_REF}`
-          - resolved_sha: `${TARGET_SHA}`
-          - prev_tag: `${PREV_TAG}`
-          - current_tag: `${APP_VERSION}`
-          - environment: `${RELEASE_ENVIRONMENT}`
+          - source_ref: \`${TARGET_REF}\`
+          - resolved_sha: \`${TARGET_SHA}\`
+          - prev_tag: \`${PREV_TAG}\`
+          - current_tag: \`${APP_VERSION}\`
+          - environment: \`${RELEASE_ENVIRONMENT}\`
           EOF
