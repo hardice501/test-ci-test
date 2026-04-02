@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  push-tag:
+  run:
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ inputs.tag_name }}

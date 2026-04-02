@@ -15,28 +15,28 @@ on:
     outputs:
       resolved_ref:
         description: Resolved branch name or commit sha
-        value: ${{ jobs.calculate.outputs.resolved_ref }}
+        value: ${{ jobs.run.outputs.resolved_ref }}
       resolved_sha:
         description: Resolved commit sha
-        value: ${{ jobs.calculate.outputs.resolved_sha }}
+        value: ${{ jobs.run.outputs.resolved_sha }}
       next_tag:
         description: Next release tag
-        value: ${{ jobs.calculate.outputs.next_tag }}
+        value: ${{ jobs.run.outputs.next_tag }}
       prev_tag:
         description: Previous comparable tag
-        value: ${{ jobs.calculate.outputs.prev_tag }}
+        value: ${{ jobs.run.outputs.prev_tag }}
       prev_tag_sha:
         description: Commit SHA of the previous comparable tag
-        value: ${{ jobs.calculate.outputs.prev_tag_sha }}
+        value: ${{ jobs.run.outputs.prev_tag_sha }}
       stable_version:
         description: Manual stable version input
-        value: ${{ jobs.calculate.outputs.stable_version }}
+        value: ${{ jobs.run.outputs.stable_version }}
 
 permissions:
   contents: read
 
 jobs:
-  calculate:
+  run:
     runs-on: ubuntu-latest
     outputs:
       resolved_ref: ${{ steps.calculate.outputs.resolved_ref }}

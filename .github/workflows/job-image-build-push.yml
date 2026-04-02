@@ -33,7 +33,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-push:
+  run:
     runs-on: ubuntu-latest
     env:
       BASE_VERSION: latest
