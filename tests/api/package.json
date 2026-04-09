@@ -1,7 +1,7 @@
 {
   "name": "@ci-test/api-tests",
   "private": true,
-  "version": "0.0.4",
+  "version": "1.0.0",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "type-check": "tsc -p tsconfig.json --noEmit",
