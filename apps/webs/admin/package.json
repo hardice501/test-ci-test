@@ -1,7 +1,7 @@
 {
   "name": "@ci-test/admin-web",
   "private": true,
-  "version": "2.0.1",
+  "version": "0.0.7",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "type-check": "tsc -p tsconfig.json --noEmit",
