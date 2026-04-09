@@ -1,0 +1,7 @@
+env: "cloud-service"
+releaseChannel: "production"
+adminApi:
+  metaName: zksurvey-admin-api
+  image: 278563285186.dkr.ecr.ap-northeast-2.amazonaws.com/zksurvey/admin-api
+  imagePullPolicy: Always
+  imageTag: latest

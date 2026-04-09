@@ -41,11 +41,11 @@ jobs:
             LAST_HEAD="$(git hash-object -t tree /dev/null)"
           fi
 
-          if [ "${{ github.ref_name }}" = "main" ]; then
+          if [ "${{ github.ref_name }}" = "${{ vars.APP_PRIMARY_BRANCH || 'master' }}" ]; then
             MERGE_MESSAGE="$(git log -1 --format="%B")"
             IMAGE_TAG="$(echo "$MERGE_MESSAGE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
             if [ -z "$IMAGE_TAG" ]; then
-              echo "Could not extract stable version from main merge commit message" >&2
+              echo "Could not extract stable version from primary branch merge commit message" >&2
               echo "Merge commit message: $MERGE_MESSAGE" >&2
               exit 1
             fi
@@ -71,14 +71,6 @@ jobs:
             printf '%s\n' "- feature_head: \`${{ steps.meta.outputs.feature_head }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  ci:
-    needs: prepare
-    uses: ./.github/workflows/job-ci.yml
-    with:
-      source_ref: ${{ github.ref_name }}
-      resolved_sha: ${{ needs.prepare.outputs.feature_head }}
-    secrets: inherit
-
   build-and-push:
     needs:
       - prepare
@@ -89,7 +81,15 @@ jobs:
       feature_head: ${{ needs.prepare.outputs.feature_head }}
       secret_prefix: ${{ needs.prepare.outputs.secret_prefix }}
       image_tag: ${{ needs.prepare.outputs.image_tag }}
-      channel_tag: ${{ github.ref_name == 'main' && 'latest' || '' }}
+      channel_tag: ${{ github.ref_name == (vars.APP_PRIMARY_BRANCH || 'main') && 'latest' || ' }}
+    secrets: inherit
+
+  ci:
+    needs: prepare
+    uses: ./.github/workflows/job-ci.yml
+    with:
+      source_ref: ${{ github.ref_name }}
+      resolved_sha: ${{ needs.prepare.outputs.feature_head }}
     secrets: inherit
 
   push-tag:
@@ -97,9 +97,28 @@ jobs:
       - prepare
       - ci
       - build-and-push
-    if: ${{ github.ref_name == 'main' }}
+    if: ${{ github.ref_name == (vars.APP_PRIMARY_BRANCH || 'main') }}
     uses: ./.github/workflows/job-image-tag-resolve.yml
     with:
       tag_name: ${{ needs.prepare.outputs.image_tag }}
       target_sha: ${{ needs.prepare.outputs.feature_head }}
+    secrets: inherit
+
+  deployment-sync:
+    needs:
+      - prepare
+      - ci
+      - build-and-push
+      - push-tag
+    if: ${{ always() && (github.ref_name == 'dev' || github.ref_name == (vars.APP_PRIMARY_BRANCH || 'main')) }}
+    uses: ./.github/workflows/job-cross-repo-pr.yml
+    with:
+      source_ref: ${{ github.ref_name }}
+      environment: ${{ github.ref_name == (vars.APP_PRIMARY_BRANCH || 'master') && 'prod' || 'dev' }}
+      stable_version: ${{ github.ref_name == (vars.APP_PRIMARY_BRANCH || 'master') && needs.prepare.outputs.image_tag || '' }}
+      resolved_sha: ${{ needs.prepare.outputs.feature_head }}
+      image_tag: ${{ needs.prepare.outputs.image_tag }}
+      ci_result: ${{ needs.ci.result }}
+      build_result: ${{ needs.build-and-push.result }}
+      tag_push_result: ${{ github.ref_name == (vars.APP_PRIMARY_BRANCH || 'master') && needs.push-tag.result || 'skipped' }}
     secrets: inherit

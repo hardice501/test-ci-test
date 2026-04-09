@@ -21,9 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SOURCE_REF: ${{ github.ref_name }}
-      TARGET_BASE_BRANCH: main
+      TARGET_BASE_BRANCH: ${{ vars.APP_PRIMARY_BRANCH || 'main' }}
       INPUT_STABLE_VERSION: ${{ github.event.inputs.stable_version }}
-      BRANCH_NAME: chore/main-merge-${{ github.event.inputs.stable_version }}-${{ github.run_id }}
     steps:
       - name: Create GitHub App token
         id: app_token
@@ -39,6 +38,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
           token: ${{ steps.app_token.outputs.token }}
+
+      - name: Validate source branch
+        run: |
+          if [ "$SOURCE_REF" = "$TARGET_BASE_BRANCH" ]; then
+            echo "Source branch must be different from target base branch" >&2
+            exit 1
+          fi
 
       - name: Validate stable version and existing tag
         id: validate
@@ -99,15 +105,15 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create release branch and push
+      - name: Commit and push source branch
         if: ${{ steps.changes.outputs.has_changes == 'true' }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH_NAME"
           git add .
           git commit -m "chore: prepare main merge for ${{ steps.validate.outputs.tag_version }}"
-          git push origin "$BRANCH_NAME"
+          git push origin "HEAD:${SOURCE_REF}"
 
       - name: Create pull request
         id: create_pr
@@ -124,12 +130,12 @@ jobs:
 
           ## Notes
 
-          merge title에 \`${{ steps.validate.outputs.tag_version }}\` 유지 필요함.
+          merge title에 \`release ${{ steps.validate.outputs.tag_version }}\` 유지 필요함.
           EOF
           )"
           pr_url="$(gh pr create \
             --base "$TARGET_BASE_BRANCH" \
-            --head "$BRANCH_NAME" \
+            --head "$SOURCE_REF" \
             --title "release ${{ steps.validate.outputs.tag_version }}" \
             --body "$pr_body")"
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
@@ -142,6 +148,6 @@ jobs:
             printf '%s\n' "- target_base_branch: \`${TARGET_BASE_BRANCH}\`"
             printf '%s\n' "- stable_version: \`${{ steps.validate.outputs.tag_version }}\`"
             printf '%s\n' "- changes_detected: \`${{ steps.changes.outputs.has_changes }}\`"
-            printf '%s\n' "- branch: \`${BRANCH_NAME}\`"
+            printf '%s\n' "- head_branch: \`${SOURCE_REF}\`"
             printf '%s\n' "- pr_url: \`${{ steps.create_pr.outputs.url || 'not_created' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
