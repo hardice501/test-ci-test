@@ -148,6 +148,6 @@ jobs:
             printf '%s\n' "- target_base_branch: \`${TARGET_BASE_BRANCH}\`"
             printf '%s\n' "- stable_version: \`${{ steps.validate.outputs.tag_version }}\`"
             printf '%s\n' "- changes_detected: \`${{ steps.changes.outputs.has_changes }}\`"
-            printf '%s\n' "- branch: \`${BRANCH_NAME}\`"
+            printf '%s\n' "- head_branch: \`${SOURCE_REF}\`"
             printf '%s\n' "- pr_url: \`${{ steps.create_pr.outputs.url || 'not_created' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
