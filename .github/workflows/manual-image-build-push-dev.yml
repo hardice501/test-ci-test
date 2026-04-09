@@ -1,0 +1,138 @@
+name: "[DEV][Manual] Image Build Push"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_commit:
+        description: Optional commit SHA to deploy. If empty, use the selected ref from "Use workflow from"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.inputs.target_commit || 'default' }}
+  cancel-in-progress: false
+
+jobs:
+  calculate:
+    runs-on: ubuntu-latest
+    outputs:
+      source_ref: ${{ steps.calculate.outputs.source_ref }}
+      resolved_ref: ${{ steps.calculate.outputs.resolved_ref }}
+      resolved_sha: ${{ steps.calculate.outputs.resolved_sha }}
+      last_head: ${{ steps.calculate.outputs.last_head }}
+      image_tag: ${{ steps.calculate.outputs.image_tag }}
+      channel_tag: ${{ steps.calculate.outputs.channel_tag }}
+      short_sha: ${{ steps.calculate.outputs.short_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve deployment target
+        id: calculate
+        env:
+          SOURCE_REF: ${{ github.ref_name }}
+          TARGET_COMMIT: ${{ github.event.inputs.target_commit }}
+        run: |
+          set -euo pipefail
+
+          git fetch --force --tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+          if [ -n "$TARGET_COMMIT" ]; then
+            if ! git rev-parse -q --verify "${TARGET_COMMIT}^{commit}" >/dev/null 2>&1; then
+              echo "Unable to resolve target commit: $TARGET_COMMIT" >&2
+              exit 1
+            fi
+            RESOLVED_REF="$TARGET_COMMIT"
+            RESOLVED_SHA="$(git rev-parse "${TARGET_COMMIT}^{commit}")"
+          elif git show-ref --verify --quiet "refs/remotes/origin/$SOURCE_REF"; then
+            RESOLVED_REF="$SOURCE_REF"
+            RESOLVED_SHA="$(git rev-parse "refs/remotes/origin/$SOURCE_REF^{commit}")"
+          elif git rev-parse -q --verify "${SOURCE_REF}^{commit}" >/dev/null 2>&1; then
+            RESOLVED_REF="$SOURCE_REF"
+            RESOLVED_SHA="$(git rev-parse "${SOURCE_REF}^{commit}")"
+          else
+            echo "Unable to resolve source ref: $SOURCE_REF" >&2
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "${RESOLVED_SHA}^1^{commit}" >/dev/null 2>&1; then
+            LAST_HEAD="$(git rev-parse "${RESOLVED_SHA}^1^{commit}")"
+          else
+            LAST_HEAD="$(git hash-object -t tree /dev/null)"
+          fi
+
+          SHORT_SHA="$(git rev-parse --short=7 "$RESOLVED_SHA")"
+          IMAGE_TAG="dev-${SHORT_SHA}"
+
+          {
+            echo "source_ref=$SOURCE_REF"
+            echo "resolved_ref=$RESOLVED_REF"
+            echo "resolved_sha=$RESOLVED_SHA"
+            echo "last_head=$LAST_HEAD"
+            echo "image_tag=$IMAGE_TAG"
+            echo "channel_tag=dev"
+            echo "short_sha=$SHORT_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write summary
+        run: |
+          {
+            printf '%s\n' '## Dev Deployment Metadata'
+            printf '%s\n' "- source_ref: \`${{ steps.calculate.outputs.source_ref }}\`"
+            printf '%s\n' "- resolved_ref: \`${{ steps.calculate.outputs.resolved_ref }}\`"
+            printf '%s\n' "- resolved_sha: \`${{ steps.calculate.outputs.resolved_sha }}\`"
+            printf '%s\n' "- last_head: \`${{ steps.calculate.outputs.last_head }}\`"
+            printf '%s\n' "- image_tag: \`${{ steps.calculate.outputs.image_tag }}\`"
+            printf '%s\n' "- channel_tag: \`${{ steps.calculate.outputs.channel_tag }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    needs:
+      - calculate
+    uses: ./.github/workflows/job-ci.yml
+    with:
+      source_ref: ${{ needs.calculate.outputs.source_ref }}
+      resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
+    secrets: inherit
+
+  build-and-push:
+    needs:
+      - calculate
+      - ci
+    uses: ./.github/workflows/job-image-build-push.yml
+    with:
+      last_head: ${{ needs.calculate.outputs.last_head }}
+      feature_head: ${{ needs.calculate.outputs.resolved_sha }}
+      secret_prefix: DEV
+      image_tag: ${{ needs.calculate.outputs.image_tag }}
+      channel_tag: ${{ needs.calculate.outputs.channel_tag }}
+    secrets: inherit
+
+  deployment-sync:
+    needs:
+      - calculate
+      - ci
+      - build-and-push
+    uses: ./.github/workflows/job-cross-repo-dev-commit.yml
+    with:
+      source_ref: ${{ needs.calculate.outputs.source_ref }}
+      resolved_sha: ${{ needs.calculate.outputs.resolved_sha }}
+      image_tag: ${{ needs.calculate.outputs.image_tag }}
+      ci_result: ${{ needs.ci.result }}
+      build_result: ${{ needs.build-and-push.result }}
+    secrets: inherit
+
+  deploy-dev:
+    needs:
+      - calculate
+      - build-and-push
+      - deployment-sync
+    uses: ./.github/workflows/job-dev-k8s-rollout-restart.yml
+    with:
+      image_tag: ${{ needs.calculate.outputs.image_tag }}
+    secrets: inherit

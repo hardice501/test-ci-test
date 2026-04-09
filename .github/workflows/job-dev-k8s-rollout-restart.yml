@@ -1,0 +1,20 @@
+name: Job Dev K8s Rollout Restart
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        required: true
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simulate dev rollout restart
+        run: |
+          {
+            printf '%s\n' '## Simulated Dev Deployment'
+            printf '%s\n' "- image_tag: \`${{ inputs.image_tag }}\`"
+            printf '%s\n' '- mode: `simulated_rollout_restart`'
+          } >> "$GITHUB_STEP_SUMMARY"

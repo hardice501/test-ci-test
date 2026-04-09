@@ -59,9 +59,9 @@ jobs:
           STABLE_VERSION: ${{ inputs.stable_version }}
         run: |
           set -euo pipefail
-          
+
           case "$RELEASE_ENVIRONMENT" in
-            rc|hotfix|loadtest)
+            rc|loadtest)
               ;;
             *)
               echo "Unsupported environment: $RELEASE_ENVIRONMENT" >&2
@@ -103,7 +103,6 @@ jobs:
             PREV_TAG_SHA="$(git rev-parse "${LAST_CHANNEL_TAG}^{commit}")"
           else
             NEXT_CHANNEL_NUMBER=1
-            # Check if stable tag exists; if not, fall back to the previous stable tag
             if git rev-parse -q --verify "refs/tags/${NORMALIZED_STABLE_VERSION}" >/dev/null 2>&1; then
               PREV_TAG="$NORMALIZED_STABLE_VERSION"
               PREV_TAG_SHA="$(git rev-parse "${NORMALIZED_STABLE_VERSION}^{commit}")"
