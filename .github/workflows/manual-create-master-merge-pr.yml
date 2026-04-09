@@ -116,11 +116,30 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
+          pr_body="$(cat <<EOF
+          ## Summary
+
+          - source_ref: \`${SOURCE_REF}\`
+          - target_base_branch: \`${TARGET_BASE_BRANCH}\`
+          - stable_version: \`${{ steps.validate.outputs.tag_version }}\`
+          - monorepo_type: \`${{ steps.monorepo.outputs.type }}\`
+
+          ## Release Contract
+
+          - PR title must remain \`release ${{ steps.validate.outputs.tag_version }}\`.
+          - Merge this PR into \`main\` with a title/body that still contains \`${{ steps.validate.outputs.tag_version }}\`.
+          - After merge to \`main\`, release workflow runs \`CI -> image build/push(simulated) -> git tag push\`.
+
+          ## Notes
+
+          main merge 전 버전 정렬 PR 자동 생성함.
+          EOF
+          )"
           pr_url="$(gh pr create \
             --base "$TARGET_BASE_BRANCH" \
             --head "$BRANCH_NAME" \
             --title "release ${{ steps.validate.outputs.tag_version }}" \
-            --body $'## Summary\n\n- source_ref: `${SOURCE_REF}`\n- target_base_branch: `${TARGET_BASE_BRANCH}`\n- stable_version: `${{ steps.validate.outputs.tag_version }}`\n- monorepo_type: `${{ steps.monorepo.outputs.type }}`\n\n## Release Contract\n\n- PR title must remain `release ${{ steps.validate.outputs.tag_version }}`.\n- Merge this PR into `main` with a title/body that still contains `${{ steps.validate.outputs.tag_version }}`.\n- After merge to `main`, release workflow runs `CI -> image build/push(simulated) -> git tag push`.\n\n## Notes\n\nmain merge 전 버전 정렬 PR 자동 생성함.')"
+            --body "$pr_body")"
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
       - name: Write summary
