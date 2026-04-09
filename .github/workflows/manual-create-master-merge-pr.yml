@@ -1,4 +1,4 @@
-name: Manual Create Master Merge PR
+name: "[Manual] Create Main Merge PR"
 
 on:
   workflow_dispatch:
@@ -17,18 +17,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare-master-merge-pr:
+  prepare-main-merge-pr:
     runs-on: ubuntu-latest
     env:
       SOURCE_REF: ${{ github.ref_name }}
+      TARGET_BASE_BRANCH: main
       INPUT_STABLE_VERSION: ${{ github.event.inputs.stable_version }}
-      BRANCH_NAME: chore/master-merge-${{ github.run_id }}
+      BRANCH_NAME: chore/main-merge-${{ github.event.inputs.stable_version }}-${{ github.run_id }}
     steps:
+      - name: Create GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GIT_APP_ID }}
+          private-key: ${{ secrets.GIT_APP_SECRET }}
+          owner: ${{ github.repository_owner }}
+
       - name: Checkout target branch
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
+          token: ${{ steps.app_token.outputs.token }}
 
       - name: Validate stable version and existing tag
         id: validate
@@ -97,27 +107,28 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH_NAME"
           git add .
-          git commit -m "chore: prepare master merge for ${{ steps.validate.outputs.tag_version }}"
+          git commit -m "chore: prepare main merge for ${{ steps.validate.outputs.tag_version }}"
           git push origin "$BRANCH_NAME"
 
       - name: Create pull request
         id: create_pr
         if: ${{ steps.changes.outputs.has_changes == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           pr_url="$(gh pr create \
-            --base "main" \
+            --base "$TARGET_BASE_BRANCH" \
             --head "$BRANCH_NAME" \
             --title "release ${{ steps.validate.outputs.tag_version }}" \
-            --body $'## Summary\n\n- stable_version: `${{ steps.validate.outputs.tag_version }}`\n- monorepo_type: `${{ steps.monorepo.outputs.type }}`\n\n## Notes\n\nmaster merge 전 버전 정렬 PR 자동 생성함.')"
+            --body $'## Summary\n\n- source_ref: `${SOURCE_REF}`\n- target_base_branch: `${TARGET_BASE_BRANCH}`\n- stable_version: `${{ steps.validate.outputs.tag_version }}`\n- monorepo_type: `${{ steps.monorepo.outputs.type }}`\n\n## Release Contract\n\n- PR title must remain `release ${{ steps.validate.outputs.tag_version }}`.\n- Merge this PR into `main` with a title/body that still contains `${{ steps.validate.outputs.tag_version }}`.\n- After merge to `main`, release workflow runs `CI -> image build/push(simulated) -> git tag push`.\n\n## Notes\n\nmain merge 전 버전 정렬 PR 자동 생성함.')"
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
       - name: Write summary
         run: |
           {
-            printf '%s\n' '## Master Merge PR'
-            printf '%s\n' "- base_branch: \`${SOURCE_REF}\`"
+            printf '%s\n' '## Main Merge PR'
+            printf '%s\n' "- source_ref: \`${SOURCE_REF}\`"
+            printf '%s\n' "- target_base_branch: \`${TARGET_BASE_BRANCH}\`"
             printf '%s\n' "- stable_version: \`${{ steps.validate.outputs.tag_version }}\`"
             printf '%s\n' "- monorepo_type: \`${{ steps.monorepo.outputs.type }}\`"
             printf '%s\n' "- changes_detected: \`${{ steps.changes.outputs.has_changes }}\`"

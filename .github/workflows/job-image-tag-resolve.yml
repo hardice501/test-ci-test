@@ -62,8 +62,8 @@ jobs:
 
       - name: Write summary
         run: |
-          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          cat <<EOF_SUMMARY >> "$GITHUB_STEP_SUMMARY"
           ## Tag Push
           - image_tag: \`${TAG_NAME}\`
           - target_sha: \`${TARGET_SHA}\`
-          EOF
+          EOF_SUMMARY

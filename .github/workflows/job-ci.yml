@@ -60,7 +60,7 @@ jobs:
       - name: Run lint
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            if bash scripts/is_package_updated.sh 'apps|libs|packages'; then
+            if bash scripts/is_package_updated.sh 'apps|libs|packages|tests'; then
               yarn lint
             else
               echo "No code changes, skip lint check"
@@ -72,6 +72,10 @@ jobs:
       - name: Build apps
         if: ${{ github.event_name == 'pull_request' }}
         run: yarn build --filter=...[${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}]
+
+      - name: Build apps for channel workflows
+        if: ${{ github.event_name != 'pull_request' }}
+        run: yarn build
 
       - name: Run type-check
         run: |
@@ -112,32 +116,19 @@ jobs:
               printf '%s\n' "- head_ref: \`${{ github.head_ref }}\`"
               printf '%s\n' "- base_sha: \`${{ github.event.pull_request.base.sha }}\`"
               printf '%s\n' "- head_sha: \`${{ github.event.pull_request.head.sha }}\`"
-              printf '%s\n' "- lint: \`passed\`"
-              printf '%s\n' "- build: \`passed\`"
-              printf '%s\n' "- type-check: \`passed\`"
-              printf '%s\n' "- test: \`passed\`"
+              printf '%s\n' '- lint: `passed`'
+              printf '%s\n' '- build: `passed`'
+              printf '%s\n' '- type-check: `passed`'
+              printf '%s\n' '- test: `passed`'
             } >> "$GITHUB_STEP_SUMMARY"
           else
             {
               printf '%s\n' '## Channel CI'
               printf '%s\n' "- source_ref: \`${{ inputs.source_ref }}\`"
               printf '%s\n' "- resolved_sha: \`${{ inputs.resolved_sha }}\`"
-              printf '%s\n' "- lint: \`passed\`"
-              printf '%s\n' "- type-check: \`passed\`"
-              printf '%s\n' "- test: \`passed\`"
+              printf '%s\n' '- lint: `passed`'
+              printf '%s\n' '- build: `passed`'
+              printf '%s\n' '- type-check: `passed`'
+              printf '%s\n' '- test: `passed`'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-
-      - name: Notify Discord if failed
-        if: ${{ failure() && github.event_name == 'pull_request' }}
-        uses: tsickert/discord-webhook@v7.0.0
-        with:
-          webhook-url: ${{ secrets.DISCORD_WEBHOOK }}
-          username: GitHub
-          avatar-url: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
-          embed-title: "[${{ github.repository }}] CI job failed: #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}"
-          embed-url: ${{ github.event.pull_request.html_url }}
-          embed-color: 15158332
-          embed-author-name: ${{ github.event.pull_request.user.login }}
-          embed-author-url: https://github.com/${{ github.event.pull_request.user.login }}
-          embed-author-icon-url: ${{ github.event.pull_request.user.avatar_url }}
