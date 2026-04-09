@@ -109,15 +109,16 @@ jobs:
       - prepare
       - ci
       - build-and-push
-    if: ${{ github.ref_name == 'dev' }}
+      - push-tag
+    if: ${{ always() && (github.ref_name == 'dev' || github.ref_name == 'main') }}
     uses: ./.github/workflows/job-cross-repo-pr.yml
     with:
       source_ref: ${{ github.ref_name }}
-      environment: dev
-      stable_version: ''
+      environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+      stable_version: ${{ github.ref_name == 'main' && needs.prepare.outputs.image_tag || '' }}
       resolved_sha: ${{ needs.prepare.outputs.feature_head }}
       image_tag: ${{ needs.prepare.outputs.image_tag }}
       ci_result: ${{ needs.ci.result }}
       build_result: ${{ needs.build-and-push.result }}
-      tag_push_result: skipped
+      tag_push_result: ${{ github.ref_name == 'main' && needs.push-tag.result || 'skipped' }}
     secrets: inherit
