@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SOURCE_REF: ${{ github.ref_name }}
-      TARGET_BASE_BRANCH: main
+      TARGET_BASE_BRANCH: ${{ vars.APP_PRIMARY_BRANCH || 'main' }}
       INPUT_STABLE_VERSION: ${{ github.event.inputs.stable_version }}
     steps:
       - name: Create GitHub App token
@@ -130,7 +130,7 @@ jobs:
 
           ## Notes
 
-          merge title에 \`${{ steps.validate.outputs.tag_version }}\` 유지 필요함.
+          merge title에 \`release ${{ steps.validate.outputs.tag_version }}\` 유지 필요함.
           EOF
           )"
           pr_url="$(gh pr create \

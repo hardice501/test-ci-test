@@ -18,22 +18,163 @@ on:
       build_result:
         required: true
         type: string
+    secrets:
+      GIT_APP_ID:
+        required: true
+      GIT_APP_SECRET:
+        required: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-dev-${{ inputs.image_tag }}
+  cancel-in-progress: true
+
 jobs:
   run:
     runs-on: ubuntu-latest
+    env:
+      SOURCE_REF: ${{ inputs.source_ref }}
+      TARGET_SHA: ${{ inputs.resolved_sha }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      TARGET_REPOSITORY: ${{ vars.HELM_CHART_VALUES_REPO }}
+      SCRIPT_PATH: ${{ vars.SCRIPT_PATH }}
+      TARGET_SERVICES: ${{ vars.CHANNEL_DEPLOY_SERVICES }}
+      TARGET_BRANCH: ${{ vars.VALUES_DEV_BRANCH || 'dev' }}
+      TARGET_ENVIRONMENT: dev
     steps:
-      - name: Simulate values repository dev commit
+      - name: Validate workflow variables
+        id: validate_vars
+        continue-on-error: true
         run: |
+          if [ -z "$TARGET_REPOSITORY" ]; then
+            echo "Repository variable HELM_CHART_VALUES_REPO is required" >&2
+            exit 1
+          fi
+
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "Repository variable SCRIPT_PATH is required" >&2
+            exit 1
+          fi
+
+          if [ -z "$TARGET_SERVICES" ]; then
+            echo "Repository variable CHANNEL_DEPLOY_SERVICES is required" >&2
+            exit 1
+          fi
+
+      - name: Create GitHub App token
+        id: app_token
+        if: ${{ steps.validate_vars.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GIT_APP_ID }}
+          private-key: ${{ secrets.GIT_APP_SECRET }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout values repository
+        id: checkout_values
+        if: ${{ steps.app_token.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.TARGET_REPOSITORY }}
+          token: ${{ steps.app_token.outputs.token }}
+          fetch-depth: 0
+          ref: ${{ env.TARGET_BRANCH }}
+          path: values-repo
+
+      - name: Validate script path
+        id: validate_script_path
+        if: ${{ steps.checkout_values.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: values-repo
+        run: |
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "Script not found: $SCRIPT_PATH" >&2
+            exit 1
+          fi
+
+      - name: Update image tags for all services
+        id: update_values
+        if: ${{ steps.validate_script_path.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: values-repo
+        run: |
+          chmod +x "$SCRIPT_PATH"
+
+          for service in $TARGET_SERVICES; do
+            "./$SCRIPT_PATH" "$service" "$TARGET_ENVIRONMENT" "$IMAGE_TAG"
+          done
+
+      - name: Check for changes
+        id: changes
+        if: ${{ steps.update_values.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: values-repo
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push to dev branch
+        id: commit_push
+        if: ${{ steps.changes.outcome == 'success' && steps.changes.outputs.has_changes == 'true' }}
+        continue-on-error: true
+        working-directory: values-repo
+        run: |
+          set -euo pipefail
+
+          git config user.name "zkrypto action bot"
+          git config user.email "zkrypto@zkrypto.com"
+
+          git add .
+          git commit -m "chore: update dev image tag to ${IMAGE_TAG}"
+          git pull --rebase origin "${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
+
+      - name: Write summary
+        if: ${{ always() }}
+        env:
+          VALUES_COMMIT_RESULT: ${{ steps.commit_push.outcome }}
+          CHANGES_DETECTED: ${{ steps.changes.outputs.has_changes }}
+        run: |
+          if [ "$CHANGES_DETECTED" = "false" ]; then
+            values_commit_result="no_changes"
+          elif [ -n "$VALUES_COMMIT_RESULT" ]; then
+            values_commit_result="$VALUES_COMMIT_RESULT"
+          else
+            values_commit_result="skipped"
+          fi
+
           {
-            printf '%s\n' '## Simulated Dev Values Commit'
-            printf '%s\n' "- source_ref: \`${{ inputs.source_ref }}\`"
-            printf '%s\n' "- resolved_sha: \`${{ inputs.resolved_sha }}\`"
-            printf '%s\n' "- image_tag: \`${{ inputs.image_tag }}\`"
+            printf '%s\n' '## Dev Deployment Sync Result'
+            printf '%s\n' "- source_ref: \`${SOURCE_REF}\`"
+            printf '%s\n' "- resolved_sha: \`${TARGET_SHA}\`"
+            printf '%s\n' "- image_tag: \`${IMAGE_TAG}\`"
+            printf '%s\n' "- target_branch: \`${TARGET_BRANCH}\`"
             printf '%s\n' "- ci_result: \`${{ inputs.ci_result }}\`"
             printf '%s\n' "- build_result: \`${{ inputs.build_result }}\`"
-            printf '%s\n' '- mode: `simulated_cross_repo_dev_commit`'
+            printf '%s\n' "- values_commit_result: \`${values_commit_result}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if deployment sync failed
+        if: ${{ always() }}
+        run: |
+          if [ "${{ steps.validate_vars.outcome }}" = "failure" ] || \
+             [ "${{ steps.app_token.outcome }}" = "failure" ] || \
+             [ "${{ steps.checkout_values.outcome }}" = "failure" ] || \
+             [ "${{ steps.validate_script_path.outcome }}" = "failure" ] || \
+             [ "${{ steps.update_values.outcome }}" = "failure" ] || \
+             [ "${{ steps.changes.outcome }}" = "failure" ]; then
+            echo "Values sync preparation failed" >&2
+            exit 1
+          fi
+
+          if [ "${{ steps.changes.outputs.has_changes }}" = "true" ] && [ "${{ steps.commit_push.outcome }}" != "success" ]; then
+            echo "Direct commit to values repository failed" >&2
+            exit 1
+          fi

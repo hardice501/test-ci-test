@@ -92,7 +92,7 @@ jobs:
           repository: ${{ env.TARGET_REPOSITORY }}
           token: ${{ steps.app_token.outputs.token }}
           fetch-depth: 0
-          ref: ${{ inputs.environment == 'dev' && 'dev' || inputs.environment == 'prod' && 'master' || 'main' }}
+          ref: ${{ inputs.environment == 'dev' && (vars.VALUES_DEV_BRANCH || 'dev') || inputs.environment == 'prod' && (vars.VALUES_PRIMARY_BRANCH || 'main') || (vars.VALUES_CHANNEL_BRANCH || 'main') }}
           path: values-repo
 
       - name: Validate script path
@@ -136,11 +136,11 @@ jobs:
         continue-on-error: true
         run: |
           if [ "$CHANNEL_ENVIRONMENT" = "dev" ]; then
-            echo "value=master" >> "$GITHUB_OUTPUT"
+            echo "value=${{ vars.VALUES_PRIMARY_BRANCH || 'main' }}" >> "$GITHUB_OUTPUT"
           elif [ "$CHANNEL_ENVIRONMENT" = "prod" ]; then
-            echo "value=master" >> "$GITHUB_OUTPUT"
+            echo "value=${{ vars.VALUES_PRIMARY_BRANCH || 'main' }}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=main" >> "$GITHUB_OUTPUT"
+            echo "value=${{ vars.VALUES_CHANNEL_BRANCH || 'main' }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Update image tags for all services
@@ -177,7 +177,7 @@ jobs:
         with:
           token: ${{ steps.app_token.outputs.token }}
           path: values-repo
-          branch: ${{ inputs.environment == 'dev' && 'dev' || env.BRANCH_NAME }}
+          branch: ${{ inputs.environment == 'dev' && (vars.VALUES_DEV_BRANCH || 'dev') || env.BRANCH_NAME }}
           base: ${{ steps.resolve_base_branch.outputs.value }}
           add-paths: .
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
