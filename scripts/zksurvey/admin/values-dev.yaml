@@ -4,4 +4,4 @@ adminApi:
   metaName: zksurvey-admin-api
   image: 278563285186.dkr.ecr.ap-northeast-2.amazonaws.com/zksurvey/admin-api
   imagePullPolicy: Always
-  imageTag: dev-8af79ad
+  imageTag: dev-9c342e9
